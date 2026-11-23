@@ -82,7 +82,7 @@ export function parseResume(text: string): ParsedResume {
   const skills = skillsRaw
     ? skillsRaw
         .split(/[,\n•|]/)
-        .map((s) => s.replace(/^[-–]\s*/, "").trim())
+        .map((s) => s.replace(/^[A-Za-z /&]+:\s*/, "").replace(/^[-–]\s*/, "").trim())
         .filter((s) => s.length >= 2 && s.length <= 30)
         .slice(0, 40)
     : [];
@@ -224,10 +224,10 @@ export function checkAtsEngine(input: {
   );
   formatChecks.push(
     parsed.wordCount >= 250 && parsed.wordCount <= 950
-      ? check("f_length", "One-page length (fresher range)", "pass", 3, `${parsed.wordCount} words — within the one-page range`)
+      ? check("f_length", "Resume content length", "pass", 3, `${parsed.wordCount} words — within the recommended content range`)
       : parsed.wordCount >= 150 && parsed.wordCount <= 1300
-        ? check("f_length", "One-page length (fresher range)", "warn", 3, `${parsed.wordCount} words — borderline length for one page`)
-        : check("f_length", "One-page length (fresher range)", "fail", 3, `${parsed.wordCount} words — likely too ${parsed.wordCount < 150 ? "short" : "long"} for a one-page resume`)
+        ? check("f_length", "Resume content length", "warn", 3, `${parsed.wordCount} words — consider adjusting content length`)
+        : check("f_length", "Resume content length", "fail", 3, `${parsed.wordCount} words — content is ${parsed.wordCount < 150 ? "short" : "long"}`)
   );
   const firstQuarter = lines.slice(0, Math.max(4, Math.ceil(lines.length / 4))).join("\n");
   const contactTop = !!(parsed.email && firstQuarter.includes(parsed.email));
@@ -320,7 +320,10 @@ export function checkAtsEngine(input: {
   });
 
   /* ── Bullet Quality (15) ────────────────────────────────────────────── */
-  const bullets = lines
+  const bulletSource = sections.projects !== undefined || sections.experience !== undefined
+    ? `${sectionText(resumeText, "projects")}\n${sectionText(resumeText, "experience")}`.split(/\r?\n/)
+    : lines;
+  const bullets = bulletSource
     .map((l) => l.trim())
     .filter((l) => /^[•\-*▪]/.test(l) || /^developed|^built|^designed|^implemented/i.test(l))
     .map((l) => l.replace(/^[•\-*▪]\s*/, ""));
@@ -430,7 +433,7 @@ export function checkAtsEngine(input: {
     issues.push({
       label: `Missing must-have keyword: ${k}`,
       impact: 4,
-      fix: `If you genuinely have this skill, add "${k}" to Technical Skills and mention it in a project bullet. If you do not have it, leave it — never fake a skill.`,
+      fix: `Review "${k}" in the resume editor and include it in Technical Skills where relevant.`,
     });
   }
   issues.sort((a, b) => b.impact - a.impact);
@@ -455,8 +458,8 @@ function fixFor(id: string, ctx: { missingMustHave: string[]; missingNiceToHave:
     f_headings: "Rename section headings to the standard names: Professional Summary, Technical Skills, Projects, Education, Certifications.",
     f_length: "Trim or expand the content to fit one page (roughly 250–950 words for a fresher).",
     f_contact_top: "Move your name, phone, email and links to the very top of the resume body.",
-    k_overall: "Mirror the exact keyword wording from the job description in your Skills and project bullets — truthfully only.",
-    k_musthave: `Add the missing must-have keywords you genuinely have: ${ctx.missingMustHave.join(", ") || "—"}.`,
+    k_overall: "Use the job description's terminology in your Skills and relevant project bullets.",
+    k_musthave: `Review the missing required skills: ${ctx.missingMustHave.join(", ") || "—"}.`,
     s_summary: "Add a Professional Summary section (2–3 lines) at the top, tailored to the role.",
     s_skills: "Add a Technical Skills section listing your tools and technologies.",
     s_projects: "Add a Projects section with your strongest 3–4 projects for this role.",

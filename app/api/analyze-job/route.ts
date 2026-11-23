@@ -24,7 +24,7 @@ export async function POST(req: NextRequest) {
     );
   }
   const [profile, projects] = await Promise.all([getProfile(), listProjects()]);
-  let analysis: Analysis = analyzeJobRules(jdText, profile, projects);
+  let analysis: Analysis = analyzeJobRules(jdText, profile, projects, role);
 
   // Optional LLM refinement — any failure silently keeps the rule result.
   const settings = await getEffectiveSettings();

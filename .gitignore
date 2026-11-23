@@ -9,9 +9,18 @@
 
 # production
 /build
+*.tsbuildinfo
 
 # local data store (JSON fallback mode) — never commit personal data files
 /data/*.json
+
+# generated local review outputs
+/audit/*.pdf
+/audit/*.docx
+/audit/*.txt
+/audit/*.jpg
+/audit/*.png
+/audit/*.json
 
 # env files — NEVER commit secrets
 .env

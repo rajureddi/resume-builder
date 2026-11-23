@@ -8,6 +8,8 @@ import type {
   Profile,
   Project,
   ProjectIdea,
+  ExperienceItem,
+  SkillGroup,
 } from "./types";
 
 export interface RawLlmSettings {
@@ -197,6 +199,14 @@ export async function saveProfile(profile: Profile): Promise<Profile> {
   });
 }
 
+export async function saveExperience(experience: ExperienceItem[]): Promise<Profile> {
+  return update(store => { store.profile = { ...(store.profile ?? structuredClone(seedProfile)), experience }; return store.profile; });
+}
+
+export async function saveProfileSkills(skillGroups: SkillGroup[]): Promise<Profile> {
+  return update(store => { store.profile = { ...(store.profile ?? structuredClone(seedProfile)), skillGroups }; return store.profile; });
+}
+
 export async function listProjects(): Promise<Project[]> {
   const s = await load();
   return s.projects;
@@ -345,6 +355,15 @@ export async function updateApplicationStatus(
     if (!app) return null;
     app.status = status;
     return app;
+  });
+}
+
+export async function updateApplication(id: string, changes: Partial<Application>): Promise<Application | null> {
+  return update(s => {
+    const index = s.applications.findIndex(app => app.id === id);
+    if (index < 0) return null;
+    s.applications[index] = { ...s.applications[index], ...changes, id, createdAt: s.applications[index].createdAt };
+    return s.applications[index];
   });
 }
 

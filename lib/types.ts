@@ -23,6 +23,29 @@ export interface Profile {
   skillGroups: SkillGroup[];
   certifications: string[];
   coursework: string[];
+  experience?: ExperienceItem[];
+}
+
+export interface ExperienceItem {
+  id: string;
+  title: string;
+  company: string;
+  location: string;
+  startDate: string;
+  endDate: string;
+  current: boolean;
+  type: "Full-time" | "Internship" | "Contract" | "Part-time" | "Freelance" | "Volunteer";
+  bullets: string[];
+  skills: string[];
+}
+
+export interface ProjectStackVariant {
+  id: string;
+  label: string;
+  tags: string[];
+  domains?: string[];
+  description: string;
+  bullets: string[];
 }
 
 export interface Project {
@@ -35,6 +58,14 @@ export interface Project {
   github: string;
   bullets: string[];
   highlight?: string;
+  stackVariants?: ProjectStackVariant[];
+  templateId?: string;
+}
+
+export interface ProjectTemplate extends Omit<Project, "id" | "year" | "github"> {
+  id: string;
+  level: "Starter" | "Real-world";
+  recommendedSkills: string[];
 }
 
 export interface TailoredProject {
@@ -43,6 +74,7 @@ export interface TailoredProject {
   tech: string;
   bullets: string[];
   github: string;
+  variantId?: string;
 }
 
 export interface Application {
@@ -60,7 +92,33 @@ export interface Application {
   status: string;
   text: string;
   createdAt: string;
+  profileSnapshot?: Profile;
+  resumeTemplate?: ResumeTemplate;
+  additionalSections?: { title: string; lines: string[] }[];
+  generationSource?: "ai" | "rules";
+  skillGroups?: SkillGroup[];
+  interests?: string[];
+  skillLayout?: "stacked" | "columns";
+  showContactIcons?: boolean;
+  showSectionRules?: boolean;
+  experience?: ExperienceItem[];
 }
+
+export type ResumeTemplate = "classic" | "modern" | "compact";
+
+export interface ResumeLayout {
+  width: number;
+  height: number;
+  template: ResumeTemplate;
+  fontFamily: string;
+  bodySize: number;
+  pages: { items: ResumeDrawing[] }[];
+}
+
+export type ResumeDrawing =
+  | { kind: "text"; text: string; x: number; y: number; size: number; bold: boolean; italic?: boolean; color: string; width: number; href?: string }
+  | { kind: "rule"; x: number; y: number; width: number; color: string }
+  | { kind: "icon"; icon: "phone" | "email" | "github" | "linkedin" | "globe"; x: number; y: number; size: number; color: string };
 
 export type CheckStatus = "pass" | "warn" | "fail";
 

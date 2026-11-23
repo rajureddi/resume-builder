@@ -5,10 +5,16 @@ import type {
   Project,
   RankedProject,
 } from "./types";
+import { contactText, educationText } from "./resumeContent";
+import { groupedResumeSkills } from "./resumeSkills";
+import { containsTerm, skillSupported } from "./terms";
+export { containsTerm, skillSupported } from "./terms";
+import { projectForVariant, roleProjectBullets } from "./projectContent";
+import { experiencePeriod, experienceTitle, tailorExperience } from "./experience";
 
 /* ── Skill dictionary (canonical terms an ATS looks for) ────────────── */
 export const SKILL_DICTIONARY: string[] = [
-  "Python", "Java", "JavaScript", "TypeScript", "Kotlin", "C++", "SQL",
+  "Python", "Java", "JavaScript", "TypeScript", "Kotlin", "C++", "SQL", "Flutter", "Dart", "GraphQL", "Express", "Prisma", "Supabase", "Firebase", "Redis",
   "React", "Next.js", "Node.js", "Flask", "FastAPI", "Django", "Spring Boot",
   "Android", "KivyMD", "ARCore", "MediaPipe", "MNN", "TensorFlow Lite",
   "TensorFlow", "PyTorch", "Keras", "Scikit-learn", "OpenCV", "YOLO",
@@ -22,9 +28,16 @@ export const SKILL_DICTIONARY: string[] = [
   "Pandas", "NumPy", "Power BI", "Tableau", "Excel", "FinTech", "Payments",
   "UPI", "USSD", "Fraud Detection", "Backtesting", "Accessibility",
   "Text-to-Speech", "Inference", "Model Deployment", "API Development",
+  "FAISS", "Qdrant", "LangChain", "Chroma", "Ollama", "pgvector", "Sentence Transformers", "XGBoost", "Streamlit", "dbt", "Airflow", "Terraform", "GitHub Actions", "Playwright", "Vitest", "Pytest", "React Query", "Recharts", "Room",
 ];
 
 const DOMAIN_KEYWORDS: Record<string, string[]> = {
+  Flutter: ["flutter", "dart", "widget", "riverpod", "bloc", "supabase"],
+  RAG: ["rag", "retrieval augmented", "retrieval-augmented", "vector search", "embeddings", "faiss", "qdrant", "langchain", "pgvector"],
+  Database: ["database", "postgresql", "mysql", "sql", "schema", "normalization", "indexes", "query optimization", "transactions"],
+  React: ["react", "jsx", "react query", "redux", "next.js", "frontend", "front-end"],
+  Testing: ["test automation", "qa", "playwright", "vitest", "pytest", "testing", "selenium"],
+  DevOps: ["devops", "terraform", "github actions", "ci/cd", "deployment pipeline", "kubernetes", "docker"],
   "AI/ML": ["machine learning", "deep learning", "artificial intelligence", "ai", "ml", "model", "training", "neural", "tensorflow", "pytorch", "scikit-learn", "inference", "prediction"],
   "Computer Vision": ["computer vision", "image", "video", "yolo", "opencv", "object detection", "face recognition", "camera", "vision", "ocr", "segmentation", "cnn"],
   NLP: ["nlp", "natural language", "text", "bert", "transformers", "language model", "llm", "sentiment", "ner", "named entity", "speech", "chatbot", "rag"],
@@ -39,19 +52,6 @@ const DOMAIN_KEYWORDS: Record<string, string[]> = {
 };
 
 export const DOMAINS = Object.keys(DOMAIN_KEYWORDS);
-
-function esc(s: string): string {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-export function containsTerm(text: string, term: string): boolean {
-  const t = term.toLowerCase();
-  const hay = text.toLowerCase();
-  if (/^[a-z#+.]+$/.test(t) && t.length <= 3) {
-    return new RegExp(`(^|[^a-z0-9])${esc(t)}([^a-z0-9]|$)`).test(hay);
-  }
-  return hay.includes(t);
-}
 
 export function extractKeywords(jdText: string): string[] {
   const found: string[] = [];
@@ -90,19 +90,8 @@ export function supportedSkillPool(
   for (const g of profile.skillGroups) for (const i of g.items) pool.add(i);
   for (const c of profile.coursework) pool.add(c);
   for (const p of projects) for (const t of p.tags) pool.add(t);
+  for (const item of profile.experience ?? []) for (const skill of item.skills) pool.add(skill);
   return [...pool];
-}
-
-export function skillSupported(
-  skill: string,
-  pool: string[]
-): boolean {
-  return pool.some(
-    (p) =>
-      p.toLowerCase() === skill.toLowerCase() ||
-      containsTerm(p, skill) ||
-      containsTerm(skill, p)
-  );
 }
 
 export function rankProjects(
@@ -124,7 +113,7 @@ export function rankProjects(
       score += 20;
       reasons.push(`Also fits ${secondary}`);
     }
-    const haystack = `${project.title} ${project.description} ${project.tags.join(" ")}`;
+    const haystack = `${project.title} ${project.description} ${project.tags.join(" ")} ${(project.stackVariants ?? []).map(variant => `${variant.tags.join(" ")} ${variant.description}`).join(" ")}`;
     for (const kw of keywords) {
       if (containsTerm(haystack, kw)) {
         score += 10;
@@ -148,9 +137,10 @@ export function rankProjects(
 export function analyzeJobRules(
   jdText: string,
   profile: Profile,
-  projects: Project[]
+  projects: Project[],
+  role?: string
 ): Analysis {
-  const { primary, secondary } = detectDomains(jdText);
+  const { primary, secondary } = detectDomains(`${role ?? ""}\n${jdText}`);
   const keywords = extractKeywords(jdText);
   // must-have ≈ keywords appearing in the first 40% of the JD or repeated
   const head = jdText.slice(0, Math.ceil(jdText.length * 0.4));
@@ -171,14 +161,16 @@ export function analyzeJobRules(
 
 export function orderSkills(
   profile: Profile,
-  keywords: string[]
+  keywords: string[],
+  projectSkills: string[] = []
 ): string[] {
-  const flat: string[] = [];
-  for (const g of profile.skillGroups) flat.push(...g.items);
+  const flat = [...new Set([...profile.skillGroups.flatMap(g => g.items), ...projectSkills])];
   const kwLower = keywords.map((k) => k.toLowerCase());
   const score = (s: string) =>
     kwLower.some((k) => k === s.toLowerCase() || containsTerm(s, k)) ? 0 : 1;
-  return [...flat].sort((a, b) => score(a) - score(b));
+  const ranked = [...flat].sort((a, b) => score(a) - score(b));
+  const relevantCount = ranked.filter(skill => score(skill) === 0).length;
+  return ranked.slice(0, Math.max(12, Math.min(18, relevantCount)));
 }
 
 function joinList(items: string[]): string {
@@ -191,9 +183,8 @@ function joinList(items: string[]): string {
 export function splitSentences(text: string): string[] {
   const clean = text.replace(/\s+/g, " ").trim();
   if (!clean) return [];
-  const parts = clean.match(/[^.!?]+[.!?]+["')\]]*\s*/g);
-  if (!parts) return [clean];
-  return parts.map((s) => s.trim()).filter(Boolean);
+  const segmenter = new Intl.Segmenter("en", { granularity: "sentence" });
+  return [...segmenter.segment(clean)].map(part => part.segment.trim()).filter(Boolean);
 }
 
 /**
@@ -202,11 +193,16 @@ export function splitSentences(text: string): string[] {
  * before an application is saved (rule composer, LLM rewrite and
  * Auto-Fix alike), so no path can persist a long paragraph.
  */
-export function trimSummary(summary: string, maxSentences = 4): string {
-  const clean = summary.replace(/\s+/g, " ").trim();
-  const sentences = splitSentences(clean);
-  if (sentences.length <= maxSentences) return clean;
-  return sentences.slice(0, maxSentences).join(" ");
+export function trimSummary(summary: string, maxSentences = 3, maxWords = 75): string {
+  const clean = summary.replace(/\b(Node|Next|React)\.\s+js\b/gi, "$1.js").replace(/\s+/g, " ").trim();
+  const chosen: string[] = [];
+  for (const sentence of splitSentences(clean).slice(0, maxSentences)) {
+    if ([...chosen, sentence].join(" ").split(/\s+/).length > maxWords) break;
+    chosen.push(sentence);
+  }
+  if (chosen.length) return chosen.join(" ");
+  const words = clean.split(/\s+/);
+  return words.length <= maxWords ? clean : `${words.slice(0, maxWords).join(" ").replace(/[,;:]$/, "")}.`;
 }
 
 /**
@@ -225,62 +221,56 @@ export function buildSummary(
   primary: string,
   topSkills: string[],
   topProjectTitles: string[],
-  opts?: { keywords?: string[]; secondary?: string | null }
+  opts?: { keywords?: string[]; secondary?: string | null; projectEvidence?: string[]; experienceCount?: number }
 ): string {
   const headline = profile.title.split("•")[0].trim();
-  const cleanRole = role?.trim() ?? "";
-  const rolePart =
-    cleanRole && cleanRole !== "Auto-Fixed Resume"
-      ? `, applying for the ${cleanRole} role`
-      : "";
   const secondaryPart = opts?.secondary ? ` and ${opts.secondary}` : "";
-  const s1 = `${headline} specialising in ${primary}${secondaryPart}${rolePart}.`;
-
-  const projects = topProjectTitles.filter(Boolean).slice(0, 3);
-  const s2 = projects.length
-    ? `Hands-on experience building production-grade software end to end, proven through projects such as ${joinList(projects)}.`
-    : `Hands-on experience building production-grade software and intelligent systems end to end.`;
-
-  const strengths = (
-    opts?.keywords?.length ? opts.keywords : topSkills
-  ).slice(0, 5);
-  const s3 = strengths.length
-    ? `Core strengths for this role: ${strengths.join(", ")} — matched directly to the job requirements.`
-    : "";
-
-  const s4 = `Proven track record of shipping complete, working products end to end.`;
-  return [s1, s2, s3, s4].filter(Boolean).join(" ");
+  const strengths = (opts?.keywords?.length ? opts.keywords : topSkills).slice(0, 4);
+  const s1 = `${headline} with ${opts?.experienceCount ? "experience" : "hands-on project experience"} in ${primary}${secondaryPart}.`;
+  const evidence = opts?.projectEvidence?.find(sentence => sentence.trim());
+  const s2 = evidence ? `${evidence.trim().replace(/[.!?]$/, "")}.` : topProjectTitles[0] ? `Project work includes ${topProjectTitles[0]}.` : "";
+  const s3 = strengths.length ? `Technical experience includes ${joinList(strengths)}.` : "";
+  return trimSummary([s1, s2, s3].filter(Boolean).join(" "));
 }
 
 export function buildResumeText(
   profile: Profile,
   app: Pick<
     Application,
-    "summary" | "skills" | "projects" | "role"
+    "summary" | "skills" | "projects" | "role" | "additionalSections" | "skillGroups" | "interests" | "experience"
   >
 ): string {
   const lines: string[] = [];
   lines.push(profile.name.toUpperCase());
-  lines.push(
-    `${profile.phone} | ${profile.email} | ${profile.github} | ${profile.linkedin} | ${profile.portfolio}`
-  );
+  lines.push(contactText(profile));
   lines.push("");
   lines.push("PROFESSIONAL SUMMARY");
   lines.push(app.summary);
   lines.push("");
   lines.push("TECHNICAL SKILLS");
-  lines.push(app.skills.join(", "));
-  lines.push("");
-  lines.push("PROJECTS");
+  for (const group of groupedResumeSkills(profile, app)) lines.push(`${group.label}: ${group.items.join(", ")}`);
+  if (app.interests?.length) lines.push(`Interests: ${app.interests.join(", ")}`);
+  if (app.experience?.length) {
+    lines.push("", "WORK EXPERIENCE");
+    for (const item of app.experience) {
+      lines.push(`${experienceTitle(item)} (${experiencePeriod(item)})`, item.location);
+      for (const bullet of item.bullets) lines.push(`• ${bullet}`);
+    }
+  }
+  if (app.projects.length) lines.push("", "PROJECTS");
   for (const p of app.projects) {
-    lines.push(`${p.title} (${p.tech})`);
+    lines.push(p.title);
+    if (p.tech) lines.push(p.tech);
     for (const b of p.bullets) lines.push(`• ${b}`);
     if (p.github) lines.push(`GitHub: ${p.github}`);
+  }
+  for (const section of app.additionalSections ?? []) {
+    lines.push("", section.title.toUpperCase(), ...section.lines);
   }
   lines.push("");
   lines.push("EDUCATION");
   for (const e of profile.education) {
-    lines.push(`${e.title} — ${e.org} (${e.period}) — ${e.detail}`);
+    lines.push(educationText(e));
   }
   lines.push("");
   lines.push("CERTIFICATIONS");
@@ -295,71 +285,40 @@ export function tailorRules(input: {
   profile: Profile;
   projects: Project[];
   selectedProjectIds?: string[];
+  projectVariants?: Record<string, string>;
+  selectedSkills?: string[];
+  selectedExperienceIds?: string[];
   analysis?: Analysis;
 }): Omit<Application, "id" | "createdAt" | "status"> {
   const { profile, projects } = input;
-  const analysis =
-    input.analysis ?? analyzeJobRules(input.jdText, profile, projects);
-
-  const selected = input.selectedProjectIds?.length
-    ? analysis.rankedProjects.filter((r) =>
-        input.selectedProjectIds!.includes(r.project.id)
-      )
-    : analysis.rankedProjects.filter((r) => r.score > 0).slice(0, 4);
-  const chosen = (selected.length ? selected : analysis.rankedProjects.slice(0, 3));
-
-  const skills = orderSkills(profile, analysis.keywords);
-  const pool = supportedSkillPool(profile, projects);
-  const gaps = analysis.keywords.filter((k) => !skillSupported(k, pool));
-
-  const tailoredProjects = chosen.map((r) => ({
-    projectId: r.project.id,
-    title: r.project.title,
-    tech: r.project.tags.slice(0, 6).join(", "),
-    bullets: r.project.bullets,
-    github: r.project.github,
+  const analysis = input.analysis ?? analyzeJobRules(input.jdText, profile, projects, input.role);
+  const candidates = analysis.rankedProjects;
+  const chosen = input.selectedProjectIds !== undefined
+    ? input.selectedProjectIds.map(id => candidates.find(candidate => candidate.project.id === id)).filter((candidate): candidate is RankedProject => Boolean(candidate))
+    : candidates.filter(candidate => candidate.score > 0).slice(0, 4);
+  const chosenProjects = chosen.map(candidate => projectForVariant(candidate.project, input.projectVariants?.[candidate.project.id]));
+  const experience = tailorExperience(profile.experience ?? [], analysis.keywords, input.selectedExperienceIds);
+  const skills = input.selectedSkills !== undefined ? [...new Set(input.selectedSkills.map(skill => skill.trim()).filter(Boolean))]
+    : orderSkills(profile, analysis.keywords, [...chosenProjects.flatMap(project => project.tags), ...experience.flatMap(item => item.skills)]);
+  const tailoredProjects = chosenProjects.map(project => ({
+    projectId: project.id, title: project.title,
+    tech: [...project.tags].sort((a, b) => Number(analysis.keywords.some(keyword => skillSupported(keyword, [b]))) - Number(analysis.keywords.some(keyword => skillSupported(keyword, [a])))).join(", "),
+    bullets: roleProjectBullets(project, input.role, analysis.keywords),
+    github: project.github, variantId: input.projectVariants?.[project.id] || undefined,
   }));
-
-  // JD keywords the user can truthfully claim — these lead the summary.
-  const matchedSupported = analysis.keywords.filter((k) =>
-    skillSupported(k, pool)
-  );
-  // The summary names the selected projects that match the most JD
-  // keywords first (ties keep rank order), so the project that best
-  // evidences this JD leads the summary — e.g. TurantPay for an
-  // Android/payments JD, not just the highest domain score.
-  const summaryTitles = [...chosen]
-    .sort(
-      (a, b) =>
-        b.matchedKeywords.length - a.matchedKeywords.length || b.score - a.score
-    )
-    .map((r) => r.project.title);
-  const summary = buildSummary(
-    profile,
-    input.role,
-    analysis.domainPrimary,
-    skills,
-    summaryTitles,
-    { keywords: matchedSupported, secondary: analysis.domainSecondary }
-  );
-
-  const partial = {
-    summary,
-    skills,
-    projects: tailoredProjects,
-    role: input.role,
+  const matched = analysis.keywords.filter(keyword => skillSupported(keyword, skills));
+  const evidenceSkills = [...chosenProjects.flatMap(project => project.tags), ...experience.flatMap(item => item.skills)];
+  const domainSupported = (domain: string) => chosenProjects.some(project => project.domains.includes(domain)) || (DOMAIN_KEYWORDS[domain] ?? []).some(keyword => skillSupported(keyword, evidenceSkills));
+  const summaryDomain = domainSupported(analysis.domainPrimary) ? analysis.domainPrimary : chosenProjects[0]?.domains[0] ?? "software development";
+  const summary = buildSummary(profile, input.role, summaryDomain, skills, chosenProjects.map(project => project.title), {
+    keywords: matched, secondary: analysis.domainSecondary && domainSupported(analysis.domainSecondary) ? analysis.domainSecondary : null, projectEvidence: [...experience.flatMap(item => item.bullets), ...tailoredProjects.flatMap(project => project.bullets)], experienceCount: experience.length,
+  });
+  const payload: Omit<Application, "id" | "createdAt" | "status"> = {
+    company: input.company, role: input.role, domainPrimary: analysis.domainPrimary, domainSecondary: analysis.domainSecondary,
+    jdText: input.jdText, profileSnapshot: structuredClone(profile), resumeTemplate: "compact", generationSource: "rules",
+    summary, skills, projects: tailoredProjects, experience,
+    gaps: analysis.keywords.filter(keyword => !skillSupported(keyword, skills)), atsScore: 0, text: "",
   };
-  return {
-    company: input.company,
-    role: input.role,
-    domainPrimary: analysis.domainPrimary,
-    domainSecondary: analysis.domainSecondary,
-    jdText: input.jdText,
-    summary,
-    skills,
-    projects: tailoredProjects,
-    gaps,
-    atsScore: 0, // computed by caller with the ATS engine on the final text
-    text: buildResumeText(profile, partial),
-  };
+  payload.text = buildResumeText(profile, payload);
+  return payload;
 }

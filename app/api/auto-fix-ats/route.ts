@@ -25,6 +25,7 @@ export async function POST(req: NextRequest) {
     jdText?: string;
     sourceType?: string;
     resumeName?: string;
+    additionalSkills?: string[];
   };
 
   let resumeText = body.resumeText ?? "";
@@ -48,6 +49,9 @@ export async function POST(req: NextRequest) {
       { ok: false, error: "No resume text to fix." },
       { status: 400 }
     );
+  }
+  if (body.additionalSkills !== undefined && (!Array.isArray(body.additionalSkills) || body.additionalSkills.length > 60 || !body.additionalSkills.every(skill => typeof skill === "string" && skill.length <= 80))) {
+    return NextResponse.json({ error: "Invalid selected skills" }, { status: 400 });
   }
 
   const [profile, projects] = await Promise.all([getProfile(), listProjects()]);
@@ -73,6 +77,7 @@ export async function POST(req: NextRequest) {
     baseApplication,
     profile,
     projects,
+    additionalSkills: body.additionalSkills,
   });
 
   if (!applicationPayload || !afterResult) {

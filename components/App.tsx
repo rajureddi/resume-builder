@@ -1,9 +1,17 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import Orb, { type OrbState } from "./Orb";
+import Orb from "./Orb";
+import { api } from "@/lib/apiClient";
+import { BackBtn, OrbPanel, useStepCycle } from "./StudioUI";
+import BuildView from "./BuildView";
+import ExperienceView from "./ExperienceView";
+import SkillsView from "./SkillsView";
+import ProjectEditor from "./ProjectEditor";
+import ProjectTemplateGallery from "./ProjectTemplateGallery";
+import ResumePreview from "./ResumePreview";
+import ResumeEditor, { type ResumeEdits } from "./ResumeEditor";
 import type {
-  Analysis,
   Application,
   AtsCheck,
   FixEntry,
@@ -16,23 +24,6 @@ import type {
 
 /* ───────────────────────── helpers ───────────────────────── */
 
-async function api<T = Record<string, unknown>>(
-  path: string,
-  opts?: RequestInit & { json?: unknown }
-): Promise<T> {
-  const res = await fetch(path, {
-    ...opts,
-    headers: {
-      ...(opts?.json !== undefined ? { "Content-Type": "application/json" } : {}),
-      ...(opts?.headers ?? {}),
-    },
-    body: opts?.json !== undefined ? JSON.stringify(opts.json) : opts?.body,
-  });
-  const data = (await res.json().catch(() => ({}))) as T & { error?: string };
-  if (!res.ok) throw new Error(data.error ?? `Request failed (${res.status})`);
-  return data;
-}
-
 const fmtDate = (iso: string) =>
   new Date(iso).toLocaleDateString("en-IN", {
     day: "numeric",
@@ -42,7 +33,7 @@ const fmtDate = (iso: string) =>
 
 type View =
   | "home" | "build" | "resumes" | "resume" | "ats" | "ats-result"
-  | "more" | "projects" | "project-form" | "build-later" | "profile" | "settings" | "iphone";
+  | "more" | "projects" | "project-form" | "build-later" | "profile" | "settings" | "iphone" | "skills" | "experience";
 
 /* ───────────────────────── icons (SVG line) ───────────────────────── */
 
@@ -59,28 +50,6 @@ const IconPlus = () => ic(<><path d="M12 5v14M5 12h14" /></>);
 const IconBrief = () => ic(<><rect x="3" y="8" width="18" height="12" rx="2" /><path d="M9 8V5a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v3" /></>);
 
 /* ───────────────────────── small components ───────────────────────── */
-
-function BackBtn({ label, onClick }: { label: string; onClick: () => void }) {
-  return (
-    <div className="back-row">
-      <button className="back-btn" onClick={onClick}>
-        <span className="chev">‹</span> {label}
-      </button>
-    </div>
-  );
-}
-
-function OrbPanel({ state, text, sub }: { state: OrbState; text: string; sub?: string }) {
-  return (
-    <div className="orb-panel">
-      <Orb state={state} size={64} theme="dark" />
-      <div>
-        <div className="step-text">{text}</div>
-        {sub ? <div className="step-sub">{sub}</div> : null}
-      </div>
-    </div>
-  );
-}
 
 function ScoreRing({ score, size = 132 }: { score: number; size?: number }) {
   const [shown, setShown] = useState(0);
@@ -132,6 +101,8 @@ export default function App() {
   const [toast, setToast] = useState("");
   const [currentApp, setCurrentApp] = useState<Application | null>(null);
   const [currentCheck, setCurrentCheck] = useState<AtsCheck | null>(null);
+  const [projectReturn, setProjectReturn] = useState<View>("projects");
+  const [buildDraft, setBuildDraft] = useState({ company: "", role: "", jd: "" });
   const [editingProject, setEditingProject] = useState<Project | "new" | null>(null);
   const [atsPrefill, setAtsPrefill] = useState<{ resumeText: string; resumeName: string; sourceType: string } | null>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -185,8 +156,9 @@ export default function App() {
     );
   }
 
+  const navView: View = ["more", "projects", "build-later", "profile", "settings", "iphone", "skills", "experience"].includes(view) ? "more" : view === "project-form" ? (projectReturn === "build" ? "build" : "more") : view === "resume" ? "resumes" : view === "ats-result" ? "ats" : view;
   const navItem = (v: View, label: string, icon: React.ReactNode) => (
-    <button key={v} className={view === v ? "active" : ""} onClick={() => go(v)}>
+    <button key={v} className={navView === v ? "active" : ""} aria-current={navView === v ? "page" : undefined} onClick={() => go(v)}>
       <span className="nav-ic">{icon}</span>
       {label}
     </button>
@@ -224,6 +196,10 @@ export default function App() {
         {view === "build" && (
           <BuildView
             projects={boot.projects}
+            profile={boot.profile}
+            draft={buildDraft}
+            onDraft={setBuildDraft}
+            onTemplate={(project) => { setEditingProject(project); setProjectReturn("build"); go("project-form"); }}
             showToast={showToast}
             onCreated={(a) => { setCurrentApp(a); refreshBoot(); go("resume"); }}
             goHome={() => go("home")}
@@ -242,6 +218,7 @@ export default function App() {
             profile={boot.profile}
             goBack={() => go("resumes")}
             showToast={showToast}
+            onSaved={(a) => setCurrentApp(a)}
             checkThis={(a) => {
               setAtsPrefill({ resumeText: a.text, resumeName: `${a.company} — ${a.role}`, sourceType: "saved" });
               go("ats");
@@ -275,7 +252,7 @@ export default function App() {
           <ProjectsView
             projects={boot.projects}
             goBack={() => go("more")}
-            edit={(p) => { setEditingProject(p); go("project-form"); }}
+            edit={(p) => { setEditingProject(p); setProjectReturn("projects"); go("project-form"); }}
           />
         )}
         {view === "build-later" && (
@@ -287,9 +264,9 @@ export default function App() {
           />
         )}
         {view === "project-form" && editingProject !== null && (
-          <ProjectFormView
+          <ProjectEditor
             project={editingProject === "new" ? null : editingProject}
-            goBack={() => go("projects")}
+            goBack={() => go(projectReturn)}
             refresh={refreshBoot}
             showToast={showToast}
           />
@@ -303,6 +280,8 @@ export default function App() {
             showToast={showToast}
           />
         )}
+        {view === "experience" && <ExperienceView profile={boot.profile} goBack={() => go("more")} refresh={refreshBoot} showToast={showToast} />}
+        {view === "skills" && <SkillsView profile={boot.profile} goBack={() => go("more")} refresh={refreshBoot} showToast={showToast} />}
         {view === "settings" && (
           <SettingsView
             llm={boot.llm}
@@ -314,12 +293,6 @@ export default function App() {
         )}
         {view === "iphone" && <IphoneView goBack={() => go("more")} />}
       </main>
-
-      {/* Dedicated print rendering — lives OUTSIDE the app shell so print
-          CSS can hide all chrome and show only this, in normal flow. */}
-      {view === "resume" && currentApp ? (
-        <PrintResume app={currentApp} profile={boot.profile} />
-      ) : null}
 
       <nav className="bottom-nav">
         {navItem("home", "Home", <IconHome />)}
@@ -422,214 +395,6 @@ function HomeView({ boot, go, openApp }: { boot: Boot; go: (v: View) => void; op
 
 /* ───────────────────────── Build flow ───────────────────────── */
 
-const ANALYZE_STEPS = [
-  "Detecting domain…",
-  "Extracting keywords…",
-  "Selecting projects…",
-  "Scoring project fit…",
-];
-const GENERATE_STEPS = [
-  "Writing your summary…",
-  "Tailoring project bullets…",
-  "Ordering skills for this JD…",
-  "Scoring the new resume…",
-];
-
-function useStepCycle(steps: string[], active: boolean): string {
-  const [i, setI] = useState(0);
-  useEffect(() => {
-    if (!active) return;
-    setI(0);
-    const t = setInterval(() => setI((v) => (v + 1) % steps.length), 1100);
-    return () => clearInterval(t);
-  }, [active, steps.length]);
-  return steps[i];
-}
-
-function BuildView({
-  projects,
-  onCreated,
-  goHome,
-  showToast,
-}: {
-  projects: Project[];
-  onCreated: (a: Application) => void;
-  goHome: () => void;
-  showToast: (m: string) => void;
-}) {
-  const [company, setCompany] = useState("");
-  const [role, setRole] = useState("");
-  const [jd, setJd] = useState("");
-  const [phase, setPhase] = useState<"form" | "analyzing" | "select" | "generating">("form");
-  const [analysis, setAnalysis] = useState<Analysis | null>(null);
-  const [ideasAdded, setIdeasAdded] = useState<ProjectIdea[]>([]);
-  const [selected, setSelected] = useState<string[]>([]);
-  const [error, setError] = useState("");
-  const step = useStepCycle(ANALYZE_STEPS, phase === "analyzing");
-  const genStep = useStepCycle(GENERATE_STEPS, phase === "generating");
-
-  const analyze = async () => {
-    setError("");
-    if (!company.trim() || !role.trim()) {
-      setError("Enter the company and the role first.");
-      return;
-    }
-    if (jd.trim().length < 30) {
-      setError("Paste the full job description — at least a few lines.");
-      return;
-    }
-    setPhase("analyzing");
-    try {
-      const [data] = await Promise.all([
-        api<{ analysis: Analysis; ideasAdded?: ProjectIdea[] }>("/api/analyze-job", {
-          method: "POST",
-          json: { jdText: jd, company: company.trim(), role: role.trim() },
-        }),
-        new Promise((r) => setTimeout(r, 1400)),
-      ]);
-      setAnalysis(data.analysis);
-      setIdeasAdded(data.ideasAdded ?? []);
-      const top = data.analysis.rankedProjects
-        .filter((r) => r.score > 0)
-        .slice(0, 4)
-        .map((r) => r.project.id);
-      setSelected(top.length ? top : data.analysis.rankedProjects.slice(0, 3).map((r) => r.project.id));
-      setPhase("select");
-    } catch (e) {
-      setPhase("form");
-      setError(e instanceof Error ? e.message : "Analysis failed. Try again.");
-    }
-  };
-
-  const generate = async () => {
-    if (!selected.length) {
-      showToast("Select at least one project");
-      return;
-    }
-    setPhase("generating");
-    try {
-      const data = await api<{ application: Application }>("/api/tailor-resume", {
-        method: "POST",
-        json: { company, role, jdText: jd, selectedProjectIds: selected },
-      });
-      showToast(`New resume created — ATS ${data.application.atsScore}/100`);
-      onCreated(data.application);
-    } catch (e) {
-      setPhase("select");
-      showToast(e instanceof Error ? e.message : "Generation failed. Try again.");
-    }
-  };
-
-  return (
-    <div>
-      <BackBtn label="Home" onClick={goHome} />
-      <p className="eyebrow">Build a new resume</p>
-      <h1 className="page-title">New application</h1>
-      <div className="steps">
-        <span className={`step-dot ${phase === "form" || phase === "analyzing" ? "active" : "done"}`}>01 · Job details</span>
-        <span className={`step-dot ${phase === "select" ? "active" : phase === "generating" ? "done" : ""}`}>02 · Domain & projects</span>
-        <span className={`step-dot ${phase === "generating" ? "active" : ""}`}>03 · Generate resume</span>
-      </div>
-
-      {(phase === "form" || phase === "analyzing") && (
-        <>
-          <label className="field">
-            <span>Company</span>
-            <input value={company} onChange={(e) => setCompany(e.target.value)} placeholder="e.g. Freshworks" />
-          </label>
-          <label className="field">
-            <span>Role</span>
-            <input value={role} onChange={(e) => setRole(e.target.value)} placeholder="e.g. AI Engineer Intern" />
-          </label>
-          <label className="field">
-            <span>Full job description</span>
-            <textarea
-              value={jd}
-              onChange={(e) => setJd(e.target.value)}
-              placeholder="Paste the complete job description here…"
-              style={{ minHeight: 190 }}
-            />
-            <span className="hint">{jd.trim() ? `${jd.trim().split(/\s+/).length} words` : "The domain and projects are chosen from this text."}</span>
-          </label>
-          {error ? <p className="form-error">{error}</p> : null}
-          {phase === "analyzing" ? (
-            <OrbPanel state="searching" text={step} sub="Reading the job description like a recruiter would" />
-          ) : (
-            <button className="btn btn-primary btn-block" onClick={analyze}>
-              Analyse JD — detect domain & pick projects
-            </button>
-          )}
-        </>
-      )}
-
-      {phase === "select" && analysis && (
-        <>
-          <p>
-            Detected domain{" "}
-            <span className="chip forest">{analysis.domainPrimary}</span>
-            {analysis.domainSecondary ? (
-              <>
-                {" "}· secondary <span className="chip">{analysis.domainSecondary}</span>
-              </>
-            ) : null}{" "}
-            <span className="chip">{analysis.engine === "llm" ? "AI analysis" : "Built-in analysis"}</span>
-          </p>
-          {analysis.keywords.length > 0 && (
-            <p className="small muted">
-              JD keywords found: {analysis.keywords.slice(0, 14).join(", ")}
-              {analysis.keywords.length > 14 ? ` +${analysis.keywords.length - 14} more` : ""}
-            </p>
-          )}
-          <p className="eyebrow section-gap">Projects selected for this domain — change if you want</p>
-          <div>
-            {analysis.rankedProjects.slice(0, 8).map((r) => (
-              <label key={r.project.id} className="checkbox-row">
-                <input
-                  type="checkbox"
-                  checked={selected.includes(r.project.id)}
-                  onChange={(e) =>
-                    setSelected((s) =>
-                      e.target.checked ? [...s, r.project.id] : s.filter((x) => x !== r.project.id)
-                    )
-                  }
-                />
-                <span className="row-main">
-                  <span className="row-title" style={{ fontSize: 15.5 }}>{r.project.title}</span>
-                  <span className="row-sub" style={{ display: "block" }}>
-                    {r.reasons.join(" · ") || "Lower fit for this JD"}
-                  </span>
-                </span>
-              </label>
-            ))}
-          </div>
-          {ideasAdded.length > 0 && (
-            <div className="idea-note">
-              <strong>Added to Build Later:</strong>{" "}
-              {ideasAdded.map((i) => i.title).join(" · ")} — this JD asks for
-              something your project library doesn't cover yet. The idea is
-              saved under More → Build Later. It is <strong>not</strong> in
-              this resume — ideas only count once you actually build the
-              project and convert it.
-            </div>
-          )}
-          <div className="btn-row">
-            <button className="btn btn-ghost" onClick={() => setPhase("form")}>‹ Back to job details</button>
-            <button className="btn btn-primary" onClick={generate}>
-              Generate new resume ({selected.length} projects)
-            </button>
-          </div>
-          <p className="small muted">A brand-new resume is saved for this job. Your other resumes are never overwritten.</p>
-        </>
-      )}
-
-      {phase === "generating" && (
-        <OrbPanel state="composing" text={genStep} sub={`Building ${company} — ${role}`} />
-      )}
-      <p className="small muted" style={{ marginTop: 10 }}>{projects.length} projects in your library are considered for every JD.</p>
-    </div>
-  );
-}
-
 /* ───────────────────────── Resumes ───────────────────────── */
 
 function ResumesView({
@@ -679,63 +444,13 @@ function ResumesView({
   );
 }
 
-/* ── Dedicated print rendering (hidden on screen, the ONLY thing that
-      prints). Plain semantic HTML in normal flow — no animations,
-      transforms, sticky/fixed elements or overflow tricks, so browsers
-      can never render it as a blank page. ── */
-function PrintResume({ app, profile }: { app: Application; profile: Profile }) {
-  return (
-    <article className="print-resume" aria-hidden="true">
-      <h1>{profile.name.toUpperCase()}</h1>
-      <p className="p-contact">
-        {profile.phone} | {profile.email} | {profile.github} | {profile.linkedin} | {profile.portfolio}
-      </p>
-
-      <h2>Professional Summary</h2>
-      <p>{app.summary}</p>
-
-      <h2>Technical Skills</h2>
-      <p>{app.skills.join(", ")}</p>
-
-      <h2>Projects</h2>
-      {app.projects.map((p) => (
-        <div key={p.projectId}>
-          <p className="p-proj">{p.title}</p>
-          <p className="p-tech">{p.tech}</p>
-          <ul>
-            {p.bullets.map((b, i) => (
-              <li key={i}>{b}</li>
-            ))}
-          </ul>
-          {p.github ? <p className="p-tech">GitHub: {p.github}</p> : null}
-        </div>
-      ))}
-
-      <h2>Education</h2>
-      <ul>
-        {profile.education.map((e, i) => (
-          <li key={i}>
-            {e.title} — {e.org} ({e.period}) — {e.detail}
-          </li>
-        ))}
-      </ul>
-
-      <h2>Certifications</h2>
-      <ul>
-        {profile.certifications.map((c, i) => (
-          <li key={i}>{c}</li>
-        ))}
-      </ul>
-    </article>
-  );
-}
-
 function ResumeDetailView({
   app,
   profile,
   goBack,
   checkThis,
   onDeleted,
+  onSaved,
   showToast,
 }: {
   app: Application;
@@ -743,9 +458,24 @@ function ResumeDetailView({
   goBack: () => void;
   checkThis: (a: Application) => void;
   onDeleted: () => void;
+  onSaved: (app: Application) => void;
   showToast: (m: string) => void;
 }) {
   const [status, setStatus] = useState(app.status);
+  const [previewReady, setPreviewReady] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const saveChanges = async (changes: Partial<ResumeEdits> & { resumeTemplate?: string }) => {
+    setSaving(true);
+    try {
+      const data = await api<{ application: Application }>(`/api/applications/${app.id}`, { method: "PATCH", json: changes });
+      onSaved(data.application);
+      setEditing(false);
+      showToast("Resume updated — preview and downloads refreshed");
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : "Could not save changes");
+    } finally { setSaving(false); }
+  };
   const [deleting, setDeleting] = useState(false);
 
   const copyText = async () => {
@@ -784,14 +514,10 @@ function ResumeDetailView({
         {app.domainSecondary ? <span className="chip">{app.domainSecondary}</span> : null}{" "}
         <MiniScore score={app.atsScore} />
       </p>
-      {app.gaps.length > 0 && (
-        <p className="form-warn">
-          Honest gaps for this JD (not faked into the resume): {app.gaps.join(", ")}
-        </p>
-      )}
 
       <div className="btn-row" style={{ margin: "14px 0 18px" }}>
-        <button className="btn btn-primary" onClick={() => window.print()}>Print / Save as PDF</button>
+        <button className="btn btn-primary" disabled={!previewReady} onClick={() => window.print()}>Print / Save as PDF</button>
+        <button className="btn" onClick={() => setEditing(true)}>Edit resume</button>
         <button className="btn" onClick={copyText}>Copy as text</button>
         <button className="btn btn-ghost" onClick={() => checkThis(app)}>Check this resume&apos;s ATS score</button>
       </div>
@@ -803,7 +529,7 @@ function ResumeDetailView({
         <a className="btn" href={`/api/applications/${app.id}/download?format=txt`}>TXT</a>
       </div>
       <p className="small muted" style={{ margin: "0 0 18px" }}>
-        PDF, DOCX and TXT all download as files, generated from this exact resume — no print step needed.
+        The PDF matches the preview below. DOCX is an editable copy; TXT contains the resume text.
       </p>
 
       <label className="field" style={{ maxWidth: 260 }}>
@@ -815,37 +541,16 @@ function ResumeDetailView({
         </select>
       </label>
 
-      <div className="paper">
-        <h2>{profile.name.toUpperCase()}</h2>
-        <p className="contact-line">
-          {profile.phone} | {profile.email} | {profile.github} | {profile.linkedin} | {profile.portfolio}
-        </p>
-        <h4>Professional Summary</h4>
-        <p style={{ margin: 0 }}>{app.summary}</p>
-        <h4>Technical Skills</h4>
-        <p style={{ margin: 0 }}>{app.skills.join(", ")}</p>
-        <h4>Projects</h4>
-        {app.projects.map((p) => (
-          <div key={p.projectId}>
-            <p className="proj-title" style={{ marginBottom: 0 }}>{p.title}</p>
-            <p className="proj-tech" style={{ margin: 0 }}>{p.tech}</p>
-            <ul>
-              {p.bullets.map((b, i) => (<li key={i}>{b}</li>))}
-            </ul>
-            {p.github ? <p className="proj-tech" style={{ margin: 0 }}>GitHub: {p.github}</p> : null}
-          </div>
-        ))}
-        <h4>Education</h4>
-        <ul>
-          {profile.education.map((e, i) => (
-            <li key={i}>{e.title} — {e.org} ({e.period}) — {e.detail}</li>
-          ))}
-        </ul>
-        <h4>Certifications</h4>
-        <ul>
-          {profile.certifications.map((c, i) => (<li key={i}>{c}</li>))}
-        </ul>
-      </div>
+      <label className="field" style={{ maxWidth: 300 }}>
+        <span>Resume layout</span>
+        <select aria-label="Resume layout" value={app.resumeTemplate ?? "compact"} disabled={saving} onChange={event => saveChanges({ resumeTemplate: event.target.value })}>
+          <option value="compact">ATS Standard (recommended)</option>
+          <option value="classic">Classic Academic</option>
+          <option value="modern">Modern Professional</option>
+        </select>
+      </label>
+      {editing && <ResumeEditor app={app} profile={profile} saving={saving} onSave={saveChanges} onCancel={() => setEditing(false)} />}
+      <ResumePreview app={app} onReady={setPreviewReady} />
 
       <div className="btn-row">
         <button className="btn btn-danger" disabled={deleting} onClick={remove}>Delete this resume</button>
@@ -995,7 +700,7 @@ function AtsView({
         same score, and every point shows its evidence.
       </p>
       <p className="small muted" style={{ marginTop: -8 }}>
-        Honest note: different companies&apos; ATS systems weight things
+        Score note: different companies&apos; ATS systems weight things
         slightly differently, so no checker can promise the identical number on
         every company system. This one shows the evidence behind every point
         so you can fix real issues.
@@ -1130,6 +835,7 @@ function AtsResultView({
   const [notesMsg, setNotesMsg] = useState("");
   const [notesBusy, setNotesBusy] = useState(false);
   const [fixBusy, setFixBusy] = useState(false);
+  const [additionalSkills, setAdditionalSkills] = useState<string[]>([]);
   const [fixOutcome, setFixOutcome] = useState<FixOutcome | null>(null);
   const [missing, setMissing] = useState<MissingItem[] | null>(
     check.missingItems ?? null
@@ -1196,13 +902,14 @@ function AtsResultView({
           sourceType: check.sourceType,
           resumeName: check.resumeName,
           applicationId: check.applicationId ?? null,
+          additionalSkills,
         },
       });
       setFixOutcome(data);
       showToast(
         data.applicationId
           ? `Auto-fix: ${data.beforeScore} → ${data.afterScore} — new resume saved`
-          : "Auto-fix: nothing truthful to add"
+          : "Resume refreshed"
       );
     } catch {
       showToast("Auto-fix failed. Try again.");
@@ -1276,7 +983,7 @@ function AtsResultView({
           </p>
 
           {missing === null && (
-            <p className="small muted">Working out which missing keywords you can truthfully add…</p>
+            <p className="small muted">Checking missing JD keywords…</p>
           )}
 
           {addableItems.length > 0 && (
@@ -1286,7 +993,7 @@ function AtsResultView({
               </p>
               <p className="small muted" style={{ marginTop: -4 }}>
                 These keywords are missing from this resume, but your own profile
-                and projects prove them — Auto-Fix adds them all for you.
+                and projects already include them — Auto-Fix adds them to this resume.
               </p>
               <div>
                 {addableItems.map((m) => (
@@ -1310,26 +1017,26 @@ function AtsResultView({
           {gapItems.length > 0 && (
             <>
               <p className="eyebrow" style={{ marginTop: 16 }}>
-                True gaps (−{gapPoints} pts)
+                Additional JD skills ({gapPoints} pts)
               </p>
               <p className="small muted" style={{ marginTop: -4 }}>
-                No evidence in your profile or projects — Auto-Fix will NOT fake
-                these. They stay lost until you learn the skill or build with it.
+                Select the skills you want to include in this resume. You can also edit the skill list after Auto-Fix.
               </p>
               <div>
                 {gapItems.map((m) => (
-                  <div key={m.keyword} className="row-item" style={{ cursor: "default" }}>
+                  <label key={m.keyword} className="checkbox-row">
+                    <input type="checkbox" aria-label={`Include ${m.keyword}`} checked={additionalSkills.includes(m.keyword)} onChange={event => setAdditionalSkills(skills => event.target.checked ? [...skills, m.keyword] : skills.filter(skill => skill !== m.keyword))} />
                     <span className="row-main">
                       <span className="row-title" style={{ fontSize: 15 }}>
                         {m.keyword}
                         {m.mustHave ? <span className="chip" style={{ marginLeft: 8 }}>must-have</span> : null}
                       </span>
                       <span className="row-sub" style={{ display: "block" }}>
-                        Not in your skills, coursework or any project
+                        Select to include in Technical Skills
                       </span>
                     </span>
                     <span className="chip danger">−{m.points} pts</span>
-                  </div>
+                  </label>
                 ))}
               </div>
             </>
@@ -1383,7 +1090,7 @@ function AtsResultView({
           </span>
         ) : (
           <button className="btn btn-main" onClick={autoFix}>
-            Auto-Fix — add everything possible &amp; create fixed resume
+            Auto-Fix — improve & save resume
           </button>
         )}
         <button className="btn" onClick={getNotes} disabled={notesBusy}>
@@ -1393,7 +1100,7 @@ function AtsResultView({
 
       {fixBusy && (
         <div style={{ marginTop: 14 }}>
-          <OrbPanel state="working" text="Building your fixed resume…" sub="Adding every keyword your profile proves, fixing the structure, saving a brand-new resume — then re-checking its score." />
+          <OrbPanel state="working" text="Building your fixed resume…" sub="Rewriting the summary and bullets, updating selected skills and applying the PDF layout." />
         </div>
       )}
       {fixOutcome && (
@@ -1416,7 +1123,7 @@ function AtsResultView({
                   <span className="row-main">
                     <span className="row-title" style={{ fontSize: 14.5 }}>{f.label}</span>
                   </span>
-                  <span className="chip solid">+{f.points} pts</span>
+                  <span className="chip solid">{f.points === 0 ? "Content" : `${f.points > 0 ? "+" : ""}${f.points} pts`}</span>
                 </div>
               ))}
             </div>
@@ -1424,7 +1131,7 @@ function AtsResultView({
 
           {fixOutcome.remainingGaps.length > 0 && (
             <p className="small" style={{ marginTop: 12 }}>
-              <strong style={{ color: "#A4261F" }}>Still missing (true gaps, not added):</strong>{" "}
+              <strong style={{ color: "#A4261F" }}>Other JD requirements:</strong>{" "}
               {fixOutcome.remainingGaps.map((g) => `${g.keyword} (−${g.points} pts)`).join(", ")}
             </p>
           )}
@@ -1480,6 +1187,8 @@ function MoreView({ go, authEnabled }: { go: (v: View) => void; authEnabled: boo
       <div>
         {item("projects", "Project Library", "Add, edit or remove the projects the studio picks from")}
         {item("build-later", "Build Later", "Project ideas from JDs you don't cover yet — build one, then convert it into a real project")}
+        {item("experience", "Experience", "Work roles, internships, dates and accomplishments")}
+        {item("skills", "Skills", "Maintain your skill library and choose skills per resume")}
         {item("profile", "My Profile", "Name, contact, summary, skills, education, certifications")}
         {item("settings", "AI Settings", "Groq API key, provider and model — powers the AI tailoring")}
         {item("iphone", "Add to iPhone", "Put Resume Studio on your Home Screen like a real app")}
@@ -1496,121 +1205,27 @@ function MoreView({ go, authEnabled }: { go: (v: View) => void; authEnabled: boo
 
 /* ───────────────────────── Projects ───────────────────────── */
 
-function ProjectsView({
-  projects,
-  goBack,
-  edit,
-}: {
-  projects: Project[];
-  goBack: () => void;
-  edit: (p: Project | "new") => void;
-}) {
-  return (
-    <div>
-      <BackBtn label="More" onClick={goBack} />
-      <p className="eyebrow">Project library</p>
-      <h1 className="page-title">Your projects</h1>
-      <p className="lede">For every job description, the studio ranks these by domain and keyword fit and auto-selects the best 3–4.</p>
-      <button className="btn btn-primary" onClick={() => edit("new")}>
-        <IconPlus /> Add a project
-      </button>
-      <div style={{ marginTop: 10 }}>
-        {projects.map((p) => (
-          <button key={p.id} className="row-item" onClick={() => edit(p)}>
-            <span className="row-main">
-              <span className="row-title" style={{ fontSize: 16 }}>{p.title}</span>
-              <span className="row-sub" style={{ display: "block" }}>
-                {p.domains.join(" · ")}{p.year ? ` · ${p.year}` : ""}
-              </span>
-            </span>
-            <span style={{ fontSize: 20, color: "#0C5B3E", fontWeight: 800 }}>›</span>
-          </button>
-        ))}
-      </div>
-    </div>
-  );
+function ProjectsView({ projects, goBack, edit }: { projects: Project[]; goBack: () => void; edit: (project: Project | "new") => void }) {
+  const [templates, setTemplates] = useState(false);
+  const [search, setSearch] = useState("");
+  const filtered = projects.filter(project => `${project.title} ${project.tags.join(" ")} ${project.domains.join(" ")}`.toLowerCase().includes(search.toLowerCase()));
+  return <div>
+    <BackBtn label="More" onClick={goBack} /><p className="eyebrow">Project library</p><h1 className="page-title">Your projects</h1>
+    <div className="btn-row"><button className={`btn ${!templates ? "btn-primary" : ""}`} onClick={() => setTemplates(false)}>My projects</button><button className={`btn ${templates ? "btn-primary" : ""}`} onClick={() => setTemplates(true)}>Project templates</button></div>
+    {templates ? <ProjectTemplateGallery onChoose={edit} /> : <>
+      <p className="small muted">Choose your source projects and their available stack versions. Bullet emphasis is adjusted for each job.</p>
+      <button className="btn btn-primary" onClick={() => edit("new")}>Add a project</button>
+      <label className="field section-gap"><span>Search my projects</span><input value={search} onChange={event => setSearch(event.target.value)} placeholder="Title, domain or technology" /></label>
+      {filtered.map(project => <article className="build-project-card" key={project.id}>
+        <div className="editor-heading"><strong>{project.title}</strong><button className="btn btn-ghost" onClick={() => edit(project)}>Edit</button></div>
+        <p className="small muted">{project.tags.join(", ")}</p>
+        <ul className="project-points">{project.bullets.slice(0, 3).map((bullet, index) => <li key={index}>{bullet}</li>)}</ul>
+        <p className="small muted">{project.domains.join(" · ")}{project.year ? ` · ${project.year}` : ""}{project.stackVariants?.length ? ` · ${project.stackVariants.length} stack versions` : ""}</p>
+      </article>)}
+      {!filtered.length && <p className="empty">No matching projects.</p>}
+    </>}
+  </div>;
 }
-
-function ProjectFormView({
-  project,
-  goBack,
-  refresh,
-  showToast,
-}: {
-  project: Project | null;
-  goBack: () => void;
-  refresh: () => Promise<unknown>;
-  showToast: (m: string) => void;
-}) {
-  const [title, setTitle] = useState(project?.title ?? "");
-  const [year, setYear] = useState(project?.year ?? "");
-  const [description, setDescription] = useState(project?.description ?? "");
-  const [tags, setTags] = useState((project?.tags ?? []).join(", "));
-  const [domains, setDomains] = useState((project?.domains ?? []).join(", "));
-  const [github, setGithub] = useState(project?.github ?? "");
-  const [bullets, setBullets] = useState((project?.bullets ?? []).join("\n"));
-  const [busy, setBusy] = useState(false);
-
-  const save = async () => {
-    if (!title.trim()) {
-      showToast("Give the project a title");
-      return;
-    }
-    setBusy(true);
-    const payload = {
-      title: title.trim(),
-      year: year.trim(),
-      description: description.trim(),
-      tags: tags.split(",").map((s) => s.trim()).filter(Boolean),
-      domains: domains.split(",").map((s) => s.trim()).filter(Boolean),
-      github: github.trim(),
-      bullets: bullets.split("\n").map((s) => s.trim()).filter(Boolean),
-      highlight: project?.highlight,
-    };
-    try {
-      if (project) {
-        await api(`/api/projects/${project.id}`, { method: "PUT", json: payload });
-      } else {
-        await api("/api/projects", { method: "POST", json: payload });
-      }
-      await refresh();
-      showToast("Project saved");
-      goBack();
-    } catch (e) {
-      showToast(e instanceof Error ? e.message : "Save failed");
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const remove = async () => {
-    if (!project || !window.confirm(`Delete "${project.title}"?`)) return;
-    await api(`/api/projects/${project.id}`, { method: "DELETE" }).catch(() => undefined);
-    await refresh();
-    goBack();
-  };
-
-  return (
-    <div>
-      <BackBtn label="Projects" onClick={goBack} />
-      <p className="eyebrow">{project ? "Edit project" : "New project"}</p>
-      <h1 className="page-title" style={{ fontSize: 28 }}>{project ? project.title : "Add a project"}</h1>
-      <label className="field"><span>Title</span><input value={title} onChange={(e) => setTitle(e.target.value)} /></label>
-      <label className="field"><span>Year</span><input value={year} onChange={(e) => setYear(e.target.value)} placeholder="2025" /></label>
-      <label className="field"><span>Description</span><textarea value={description} onChange={(e) => setDescription(e.target.value)} /></label>
-      <label className="field"><span>Tags / tech (comma separated)</span><input value={tags} onChange={(e) => setTags(e.target.value)} placeholder="YOLO, OpenCV, Python" /></label>
-      <label className="field"><span>Domains (comma separated)</span><input value={domains} onChange={(e) => setDomains(e.target.value)} placeholder="Computer Vision, AI/ML" /></label>
-      <label className="field"><span>GitHub URL</span><input value={github} onChange={(e) => setGithub(e.target.value)} /></label>
-      <label className="field"><span>Bullets (one per line)</span><textarea value={bullets} onChange={(e) => setBullets(e.target.value)} style={{ minHeight: 130 }} /></label>
-      <div className="btn-row">
-        <button className="btn btn-primary" onClick={save} disabled={busy}>{busy ? "Saving…" : "Save project"}</button>
-        {project && <button className="btn btn-danger" onClick={remove}>Delete</button>}
-      </div>
-    </div>
-  );
-}
-
-/* ───────────────────────── Build Later ideas ───────────────────────── */
 
 function BuildLaterView({
   goBack,

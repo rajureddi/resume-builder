@@ -3,114 +3,76 @@ import { createApplication, getProfile, listProjects } from "@/lib/db";
 import { checkAtsEngine } from "@/lib/ats";
 import { recordIdeasForJd } from "@/lib/ideas";
 import { getEffectiveSettings, llmJson } from "@/lib/llm";
-import {
-  analyzeJobRules,
-  buildResumeText,
-  tailorRules,
-  trimSummary,
-} from "@/lib/tailor";
+import { DOMAINS, analyzeJobRules, buildResumeText, extractKeywords, rankProjects, supportedSkillPool, tailorRules, trimSummary } from "@/lib/tailor";
+import { projectForVariant, distinctBullets, projectRewriteBullets, validRewrittenBullets } from "@/lib/projectContent";
+import { validStrings } from "@/lib/profileValidation";
+import { containsTerm } from "@/lib/terms";
+import { RESUME_REWRITE_PROMPT } from "@/lib/resumePrompts";
+import type { Analysis } from "@/lib/types";
 
 export const maxDuration = 60;
 
 export async function POST(req: NextRequest) {
-  const body = (await req.json().catch(() => ({}))) as {
-    company?: string;
-    role?: string;
-    jdText?: string;
-    selectedProjectIds?: string[];
-  };
-  if (!body.company || !body.role || !body.jdText) {
-    return NextResponse.json(
-      { ok: false, error: "Company, role and job description are all required." },
-      { status: 400 }
-    );
+  const body = await req.json().catch(() => null);
+  if (!body || typeof body.company !== "string" || !body.company.trim() || typeof body.role !== "string" || !body.role.trim() || typeof body.jdText !== "string" || body.jdText.trim().length < 30 || body.jdText.length > 20000) {
+    return NextResponse.json({ error: "Enter a company, role and a complete job description." }, { status: 400 });
   }
+  for (const field of ["selectedProjectIds", "selectedSkills", "selectedExperienceIds"]) {
+    if (body[field] !== undefined && !validStrings(body[field], field === "selectedSkills" ? 60 : 30, 100)) return NextResponse.json({ error: "Invalid resume selections." }, { status: 400 });
+  }
+  if (body.projectVariants !== undefined && (!body.projectVariants || typeof body.projectVariants !== "object" || Array.isArray(body.projectVariants) || !Object.values(body.projectVariants).every(id => typeof id === "string" && id.length <= 100))) return NextResponse.json({ error: "Invalid project stack versions." }, { status: 400 });
   const [profile, projects] = await Promise.all([getProfile(), listProjects()]);
-
+  if (body.selectedProjectIds?.some((id: string) => !projects.some(project => project.id === id)) || body.selectedExperienceIds?.some((id: string) => !profile.experience?.some(item => item.id === id))) return NextResponse.json({ error: "A selected project or experience entry is no longer available." }, { status: 400 });
+  for (const [id, variant] of Object.entries(body.projectVariants ?? {})) {
+    const project = projects.find(project => project.id === id);
+    if (!project || variant && !project.stackVariants?.some(item => item.id === variant)) return NextResponse.json({ error: "A selected project stack version is no longer available." }, { status: 400 });
+  }
+  let analysis = analyzeJobRules(body.jdText, profile, projects, body.role);
+  const refined = body.analysis;
+  if (refined && DOMAINS.includes(refined.domainPrimary) && validStrings(refined.keywords, 100, 60)) {
+    const keywords = refined.keywords.filter((keyword: string) => keyword.trim() && containsTerm(`${body.role}\n${body.jdText}`, keyword));
+    const secondary = DOMAINS.includes(refined.domainSecondary) ? refined.domainSecondary : null;
+    if (keywords.length) analysis = { ...analysis, domainPrimary: refined.domainPrimary, domainSecondary: secondary, keywords, rankedProjects: rankProjects(projects, refined.domainPrimary, secondary, keywords), engine: refined.engine === "llm" ? "llm" : "rules" } as Analysis;
+  }
   const tailored = tailorRules({
-    company: body.company,
-    role: body.role,
-    jdText: body.jdText,
-    profile,
-    projects,
-    selectedProjectIds: body.selectedProjectIds,
+    company: body.company.trim(), role: body.role.trim(), jdText: body.jdText, profile, projects, analysis,
+    selectedProjectIds: body.selectedProjectIds, projectVariants: body.projectVariants,
+    selectedSkills: body.selectedSkills, selectedExperienceIds: body.selectedExperienceIds,
   });
-
-  // Optional LLM rewrite of summary + bullets. Guardrails: only the project
-  // ids we selected, only non-empty strings; skills order never comes from
-  // the LLM, so no skill can be invented here.
   const settings = await getEffectiveSettings();
-  if (settings.apiKey && tailored.projects.length) {
-    const llm = await llmJson<{
-      summary?: string;
-      bullets?: Record<string, string[]>;
-    }>({
-      system:
-        "You rewrite resume content for one specific job. Rules: use ONLY the facts, skills and projects provided — never invent a skill, tool, employer or metric. Reply with strict JSON only: {\"summary\": string, \"bullets\": {\"<projectId>\": string[]}}. The summary MUST be short: 3–4 sentences, 55–75 words total — never a long paragraph. Keep each bullet starting with a strong action verb and under 28 words.",
+  if (settings.apiKey && (tailored.projects.length || tailored.experience?.length)) {
+    const llm = await llmJson<{ summary?: string; bullets?: Record<string, string[]>; experienceBullets?: Record<string, string[]> }>({
+      system: RESUME_REWRITE_PROMPT,
       user: JSON.stringify({
-        role: body.role,
-        company: body.company,
-        domain: tailored.domainPrimary,
-        jdKeywords: tailored.gaps.concat(tailored.skills.slice(0, 10)),
-        currentSummary: tailored.summary,
-        projects: tailored.projects.map((p) => ({
-          projectId: p.projectId,
-          title: p.title,
-          tech: p.tech,
-          bullets: p.bullets,
-        })),
+        role: body.role, company: body.company, jdText: body.jdText, jobRequirements: analysis.keywords,
+        candidate: { title: profile.title, education: profile.education, skills: supportedSkillPool(profile, projects) },
+        resumeSkills: tailored.skills, currentSummary: tailored.summary,
+        projects: tailored.projects.map(project => {
+          const source = projectForVariant(projects.find(item => item.id === project.projectId)!, project.variantId);
+          return { projectId: project.projectId, title: source.title, stack: source.tags, description: source.description, sourceBullets: source.bullets, currentBullets: project.bullets };
+        }),
+        experience: tailored.experience,
       }),
-      timeoutMs: 45000,
-      maxTokens: 2200,
+      timeoutMs: 25000, maxTokens: 3000,
     });
     if (llm) {
-      if (typeof llm.summary === "string" && llm.summary.trim().length > 40) {
-        tailored.summary = llm.summary.trim();
+      if (typeof llm.summary === "string" && llm.summary.trim().length > 40) { tailored.summary = trimSummary(llm.summary); tailored.generationSource = "ai"; }
+      for (const project of tailored.projects) {
+        const source = projectForVariant(projects.find(item => item.id === project.projectId)!, project.variantId);
+        const proposed = llm.bullets?.[project.projectId];
+        if (validRewrittenBullets(source, proposed, extractKeywords(Array.isArray(proposed) ? proposed.filter(value => typeof value === "string").join(" ") : ""))) { project.bullets = projectRewriteBullets(source, proposed, body.role, analysis.keywords); tailored.generationSource = "ai"; }
       }
-      if (llm.bullets) {
-        for (const p of tailored.projects) {
-          const b = llm.bullets[p.projectId];
-          if (
-            Array.isArray(b) &&
-            b.length &&
-            b.every((x) => typeof x === "string" && x.trim().length > 10)
-          ) {
-            p.bullets = b.map((x) => x.trim());
-          }
-        }
+      for (const item of tailored.experience ?? []) {
+        const proposed = llm.experienceBullets?.[item.id];
+        const source = { id: item.id, title: item.title, year: "", description: item.bullets.join(" "), tags: item.skills, domains: [], github: "", bullets: item.bullets };
+        if (validRewrittenBullets(source, proposed, extractKeywords(Array.isArray(proposed) ? proposed.filter(value => typeof value === "string").join(" ") : ""), 1)) { item.bullets = distinctBullets(proposed); tailored.generationSource = "ai"; }
       }
-      tailored.text = buildResumeText(profile, tailored);
     }
   }
-
-  // HARD summary cap (rules + LLM alike): at most 4 sentences before the
-  // application is saved. If the cap changed the text, rebuild the
-  // resume text so the stored text matches the stored summary.
-  const cappedSummary = trimSummary(tailored.summary);
-  if (cappedSummary !== tailored.summary) {
-    tailored.summary = cappedSummary;
-    tailored.text = buildResumeText(profile, tailored);
-  }
-
-  const ats = checkAtsEngine({
-    resumeText: tailored.text,
-    jdText: body.jdText,
-    sourceType: "saved",
-  });
-  tailored.atsScore = ats.score;
-
+  tailored.summary = trimSummary(tailored.summary);
+  tailored.text = buildResumeText(profile, tailored);
+  tailored.atsScore = checkAtsEngine({ resumeText: tailored.text, jdText: body.jdText, sourceType: "saved" }).score;
   const application = await createApplication(tailored);
-
-  // Build Later: record an idea for any JD theme the library does not
-  // cover (deduped by theme; normally already added at analyse time, so
-  // this is a no-op then). Ideas never appear in the resume just built.
-  const ideasAdded = await recordIdeasForJd({
-    jdText: body.jdText,
-    analysis: analyzeJobRules(body.jdText, profile, projects),
-    projects,
-    company: body.company,
-    role: body.role,
-  }).catch(() => []);
-
+  const ideasAdded = await recordIdeasForJd({ jdText: body.jdText, analysis, projects, company: body.company, role: body.role }).catch(() => []);
   return NextResponse.json({ ok: true, application, ideasAdded });
 }

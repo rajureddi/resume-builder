@@ -431,77 +431,53 @@ pre.extract-preview {
   max-width: calc(100vw - 32px); text-align: center;
 }
 
-/* ── Print: dedicated print rendering only ───────────────────────────
-   The screen UI is NEVER printed directly. A separate .print-resume
-   article (rendered outside the app shell, hidden on screen) is the
-   only thing shown in print: normal document flow, static position,
-   black on white. This avoids the classic blank-page causes —
-   visibility tricks, absolutely-positioned papers, sticky/fixed
-   ancestors, transforms, animations and overflow clipping. */
+.resume-preview-meta {
+  display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap;
+  font-size: 13px; color: var(--muted); margin: 20px 0 10px;
+}
+.resume-preview-meta strong { color: var(--ink); }
+.resume-pages { display: grid; gap: 20px; }
+.resume-page {
+  display: block; width: 100%; height: auto; background: white;
+  box-shadow: var(--shadow-paper); border: 0;
+}
+.resume-editor { margin: 16px 0; }
+.resume-editor h2 { margin-top: 0; font-size: 20px; }
+.editor-heading { display: flex; justify-content: space-between; gap: 12px; }
+.editor-heading span { font-size: 13px; color: var(--muted); }
+.skill-group-editor { padding: 10px 0 16px; }
+.skill-group-editor h3 { font-size: 15px; margin: 0 0 8px; }
+.skill-chips, .skill-suggestions { display: flex; flex-wrap: wrap; gap: 7px; margin-bottom: 8px; }
+.skill-chip { display: inline-flex; align-items: center; gap: 9px; padding: 5px 10px; background: var(--paper-deep); border-radius: 6px; font-size: 13px; }
+.skill-chip button { border: 0; background: transparent; font-size: 19px; cursor: pointer; color: var(--ink); padding: 0 3px; }
+.skill-add-row { display: flex; gap: 8px; margin-bottom: 12px; }
+.skill-add-row input { min-width: 0; flex: 1; padding: 9px 12px; border: 1px solid var(--stone); border-radius: 8px; background: white; font: inherit; font-size: 14px; }
+.skill-suggestions button { border: 0; border-radius: 4px; background: transparent; color: var(--forest); cursor: pointer; padding: 3px 6px; font-size: 12px; }
+.form-columns { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.section-title { margin: 24px 0 10px; font-size: 21px; }
+.template-grid { display: grid; gap: 16px; margin: 16px 0; }
+.template-card .editor-heading { align-items: flex-start; }
+.template-card .editor-heading strong { font-size: 17px; }
+.project-points { margin: 8px 0 12px; padding-left: 20px; font-size: 14px; line-height: 1.55; }
+.project-points li { padding-left: 2px; margin-bottom: 6px; }
+.build-project-card { margin: 12px 0; padding: 14px 0; border-bottom: 1px solid var(--stone); }
+.build-project-card .checkbox-row { border: 0; padding: 0; }
+.build-project-detail { margin-left: 30px; }
+.build-skill-list { max-height: 450px; overflow-y: auto; margin: 14px 0; }
+.experience-card, .variant-editor { margin: 14px 0; }
+@media (max-width: 520px) { .form-columns { grid-template-columns: 1fr; gap: 0; } }
 .print-resume { display: none; }
 
-@page {
-  size: A4;
-  margin: 13mm 14mm;
-}
+@page { size: A4; margin: 0; }
 
 @media print {
-  html, body {
-    background: #fff !important;
-    height: auto !important;
-    overflow: visible !important;
+  html, body { margin: 0 !important; padding: 0 !important; height: auto !important; overflow: visible !important; background: white !important; }
+  body > :not(.print-resume) { display: none !important; }
+  .print-resume { display: block !important; margin: 0; padding: 0; }
+  .print-resume .resume-page {
+    display: block; width: 210mm; height: 297mm; margin: 0; padding: 0;
+    border: 0; box-shadow: none; break-inside: avoid; break-after: page;
+    print-color-adjust: exact; -webkit-print-color-adjust: exact;
   }
-  .band, .shell, .bottom-nav, .toast {
-    display: none !important;
-  }
-  .print-resume {
-    display: block !important;
-    position: static !important;
-    height: auto !important;
-    max-height: none !important;
-    overflow: visible !important;
-    transform: none !important;
-    opacity: 1 !important;
-    visibility: visible !important;
-    color: #000;
-    background: #fff;
-    font-family: Arial, Helvetica, sans-serif;
-    font-size: 10.5pt;
-    line-height: 1.45;
-  }
-  .print-resume * {
-    animation: none !important;
-    transition: none !important;
-    transform: none !important;
-    opacity: 1 !important;
-    visibility: visible !important;
-    box-shadow: none !important;
-    text-shadow: none !important;
-  }
-  .print-resume h1 {
-    font-size: 19pt;
-    font-weight: 700;
-    text-align: center;
-    letter-spacing: 0.02em;
-    margin: 0 0 2mm;
-  }
-  .print-resume .p-contact {
-    text-align: center;
-    font-size: 9pt;
-    margin: 0 0 5mm;
-  }
-  .print-resume h2 {
-    font-size: 10.5pt;
-    letter-spacing: 0.12em;
-    text-transform: uppercase;
-    border-bottom: 1.2pt solid #000;
-    padding-bottom: 1mm;
-    margin: 5mm 0 2.2mm;
-    page-break-after: avoid;
-  }
-  .print-resume p { margin: 0 0 1.6mm; }
-  .print-resume ul { margin: 0 0 2mm; padding-left: 5mm; }
-  .print-resume li { margin-bottom: 0.8mm; }
-  .print-resume .p-proj { font-weight: 700; margin-top: 2.6mm; page-break-after: avoid; }
-  .print-resume .p-tech { font-size: 9.5pt; }
+  .print-resume .resume-page:last-child { break-after: auto; }
 }

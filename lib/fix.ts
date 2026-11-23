@@ -1,8 +1,6 @@
 import {
-  autoFixResume,
   checkAtsEngine,
   classifyMissingKeywords,
-  parseResume,
 } from "./ats";
 import { getEffectiveSettings, llmJson } from "./llm";
 import {
@@ -12,9 +10,11 @@ import {
   detectDomains,
   extractKeywords,
   skillSupported,
-  supportedSkillPool,
   trimSummary,
 } from "./tailor";
+import { profileFromResumeText, resumeProfile, resumeSections } from "./resumeContent";
+import { canonicalProject, distinctBullets, parseProjectBlocks, projectForVariant, roleProjectBullets, validRewrittenBullets } from "./projectContent";
+import { RESUME_REWRITE_PROMPT } from "./resumePrompts";
 import type {
   Application,
   AtsResult,
@@ -34,39 +34,6 @@ import type {
    project's tech stack / bullets → re-score → attribute the measured
    score delta back to each fix so per-fix points sum exactly to it.
    A skill with no profile evidence is NEVER added. */
-
-const TEMPLATE_FIXABLE_CHECKS = new Set([
-  "f_headings",
-  "f_contact_top",
-  "s_summary",
-  "s_skills",
-  "s_projects",
-  "s_education",
-  "s_certifications",
-]);
-
-function sectionBody(text: string, heading: string): string {
-  const lines = text.split(/\r?\n/);
-  const start = lines.findIndex(
-    (l) => l.trim().toUpperCase() === heading.toUpperCase()
-  );
-  if (start < 0) return "";
-  const out: string[] = [];
-  for (let i = start + 1; i < lines.length; i++) {
-    const t = lines[i].trim();
-    if (
-      t &&
-      t === t.toUpperCase() &&
-      t.length >= 4 &&
-      t.length <= 30 &&
-      /^[A-Z &/]+$/.test(t)
-    ) {
-      break;
-    }
-    out.push(lines[i]);
-  }
-  return out.join("\n").trim();
-}
 
 function descriptionBullet(project: Project, keyword: string): string | null {
   const sentence = project.description
@@ -111,7 +78,9 @@ function placeKeywordInProjects(
   if (libProject) {
     const existing = tailored.find((t) => t.projectId === libProject.id);
     if (existing) {
-      const placed = ensureInProject(existing, libProject);
+      const source = projectForVariant(libProject, existing.variantId);
+      if (!containsTerm(`${source.tags.join(" ")} ${source.description} ${source.bullets.join(" ")}`, kw)) return null;
+      const placed = ensureInProject(existing, source);
       return placed ? `${libProject.title} (${placed})` : libProject.title;
     }
     if (tailored.length < 5) {
@@ -151,345 +120,104 @@ export async function prepareAutoFix(input: {
   baseApplication?: Application | null;
   profile: Profile;
   projects: Project[];
+  additionalSkills?: string[];
 }): Promise<PreparedFix> {
-  const { profile, projects } = input;
-  const jdText = input.jdText ?? "";
-  const before = checkAtsEngine({
-    resumeText: input.resumeText,
-    jdText,
-    sourceType: input.sourceType ?? "paste",
-  });
-  const missing = classifyMissingKeywords({
-    resumeText: input.resumeText,
-    jdText,
-    result: before,
-    profile,
-    projects,
-  });
-  const addable = missing.filter((m) => m.addable);
-  const gaps = missing.filter((m) => !m.addable);
-
-  const pool = supportedSkillPool(profile, projects);
-  const { fixedText, fixes: textFixes } = autoFixResume({
-    resumeText: input.resumeText,
-    jdText,
-    supportedSkills: pool,
-  });
-
-  const templateFixable = before.categories
-    .filter((c) => c.id !== "keywords")
-    .flatMap((c) => c.checks)
-    .filter((c) => c.status !== "pass" && TEMPLATE_FIXABLE_CHECKS.has(c.id));
-
-  const manualSuggestions = before.issues
-    .slice(0, 5)
-    .map((i) => `${i.label} — ${i.fix}`);
-
-  if (addable.length === 0 && textFixes.length === 0 && templateFixable.length === 0) {
-    return {
-      report: {
-        improved: false,
-        beforeScore: before.score,
-        afterScore: before.score,
-        fixes: [],
-        remainingGaps: gaps,
-        manualSuggestions: [
-          ...gaps.map(
-            (g) =>
-              `True gap: ${g.keyword} (${g.points} pts) — no evidence in your profile or projects. Learn it or build a project with it before claiming it.`
-          ),
-          ...manualSuggestions,
-        ],
-        message:
-          "Nothing can be added truthfully — every missing item is a true gap or needs your input. See the suggestions below; your resume was left unchanged.",
-      },
-      applicationPayload: null,
-      afterResult: null,
-    };
-  }
-
-  /* ── Build the fixed resume as a structured application ─────────── */
+  const { projects } = input;
   const base = input.baseApplication ?? null;
-  let summary: string;
-  let skills: string[];
-  let tailoredProjects: TailoredProject[];
-
-  if (base) {
-    summary = base.summary;
-    skills = [...base.skills];
-    tailoredProjects = base.projects.map((p) => ({
-      ...p,
-      bullets: [...p.bullets],
-    }));
-  } else {
-    const parsedSummary = sectionBody(fixedText, "PROFESSIONAL SUMMARY");
-    summary =
-      parsedSummary.length > 40 ? parsedSummary.replace(/\s*\n\s*/g, " ") : profile.summary;
-    const parsedSkills = sectionBody(fixedText, "TECHNICAL SKILLS")
-      .split(/[,\n]/)
-      .map((s) => s.trim())
-      .filter((s) => s.length >= 2 && s.length <= 30);
-    const flatProfileSkills = profile.skillGroups.flatMap((g) => g.items);
-    skills = parsedSkills.length >= 4 ? parsedSkills : [...flatProfileSkills];
-
-    tailoredProjects = [];
-    for (const p of projects) {
-      const short = p.title.split("—")[0].trim();
-      if (
-        containsTerm(fixedText, p.title) ||
-        (short.length >= 6 && containsTerm(fixedText, short))
-      ) {
-        tailoredProjects.push({
-          projectId: p.id,
-          title: p.title,
-          tech: p.tags.slice(0, 6).join(", "),
-          bullets: [...p.bullets],
-          github: p.github,
-        });
-      }
-      if (tailoredProjects.length >= 4) break;
-    }
-    if (tailoredProjects.length === 0) {
-      const parsed = parseResume(input.resumeText);
-      tailoredProjects = parsed.projectLines.slice(0, 4).map((line, i) => ({
-        projectId: `ext-${i}`,
-        title: line,
-        tech: "",
-        bullets: [],
-        github: "",
-      }));
-    }
-  }
-
-  // Place every addable keyword: Technical Skills first, then projects.
-  const placementNotes = new Map<string, string>();
+  const profile = base ? resumeProfile(base, input.profile) : profileFromResumeText(input.resumeText, input.profile);
+  const jdText = input.jdText ?? "";
+  const before = checkAtsEngine({ resumeText: input.resumeText, jdText, sourceType: input.sourceType ?? "paste" });
+  const missing = classifyMissingKeywords({ resumeText: input.resumeText, jdText, result: before, profile: input.profile, projects });
+  const selected = new Set((input.additionalSkills ?? []).map(skill => skill.toLowerCase()));
+  const addable = missing.filter(item => item.addable || selected.has(item.keyword.toLowerCase()));
+  const gaps = missing.filter(item => !item.addable && !selected.has(item.keyword.toLowerCase()));
+  const sections = resumeSections(input.resumeText);
+  let skills = base ? [...base.skills] : (sections.skills ?? []).map(line => line.replace(/^[A-Za-z /&]+:\s*/, "")).join(",").split(/[,\n]/).map(skill => skill.trim()).filter(Boolean);
+  if (!skills.length) skills = profile.skillGroups.flatMap(group => group.items);
+  const tailoredProjects = (base ? base.projects : parseProjectBlocks(sections.projects ?? [], projects)).map(project => canonicalProject(project, projects));
+  const experience = (base?.experience ?? (sections.experience?.length ? [] : input.profile.experience ?? [])).map(item => ({ ...item, skills: [...item.skills], bullets: [...item.bullets] }));
+  const additionalSections = base?.additionalSections ?? Object.entries(sections)
+    .filter(([key]) => ["experience", "awards"].includes(key))
+    .map(([title, lines]) => ({ title: title === "experience" ? "Work Experience" : "Awards", lines }));
+  const placements = new Map<string, string>();
   for (const item of addable) {
-    if (!skills.some((s) => containsTerm(s, item.keyword) || containsTerm(item.keyword, s))) {
-      skills.push(item.keyword);
-    }
-    const note = placeKeywordInProjects(tailoredProjects, projects, item);
-    if (note) placementNotes.set(item.keyword, note);
+    if (!skillSupported(item.keyword, skills)) skills.push(item.keyword);
+    const placement = placeKeywordInProjects(tailoredProjects, projects, item);
+    if (placement) placements.set(item.keyword, placement);
   }
-  // Skills front-loaded with the added JD keywords (ATS reads top-down).
-  const addedSet = new Set(addable.map((a) => a.keyword.toLowerCase()));
-  skills = [
-    ...skills.filter((s) => addedSet.has(s.toLowerCase())),
-    ...skills.filter((s) => !addedSet.has(s.toLowerCase())),
-  ];
-
-  /* Fresh per-role summary for THIS fixed resume — composed from the
-     JD's role/domain, the truthfully claimable JD keywords and the
-     projects now on the resume. Never the profile's static summary and
-     never the base resume's old summary copied over. */
-  const { primary: jdPrimary, secondary: jdSecondary } = detectDomains(jdText);
-  const summaryKeywords = extractKeywords(jdText).filter((k) =>
-    skillSupported(k, pool)
-  );
-  // Name first the projects that evidence the most of this JD's keywords.
-  const summaryTitles = [...tailoredProjects]
-    .sort(
-      (a, b) =>
-        summaryKeywords.filter((k) =>
-          containsTerm(`${b.title} ${b.tech} ${b.bullets.join(" ")}`, k)
-        ).length -
-        summaryKeywords.filter((k) =>
-          containsTerm(`${a.title} ${a.tech} ${a.bullets.join(" ")}`, k)
-        ).length
-    )
-    .map((t) => t.title);
-  summary = trimSummary(
-    buildSummary(
-      profile,
-      base?.role ?? "",
-      base?.domainPrimary ?? jdPrimary,
-      skills,
-      summaryTitles,
-      {
-        keywords: summaryKeywords,
-        secondary: base?.domainSecondary ?? jdSecondary,
-      }
-    )
-  );
-
-  const role = base?.role ?? "Auto-Fixed Resume";
-  let appText = buildResumeText(profile, {
-    summary,
-    skills,
-    projects: tailoredProjects,
-    role,
-  });
-
-  /* ── Optional LLM weave: make added keywords read naturally in the
-        affected bullets. Strictly validated; any failure keeps the
-        rule-based version. Never blocks the fix. ──────────────────── */
-  const settings = await getEffectiveSettings().catch(() => null);
-  if (settings?.apiKey && addable.length > 0) {
-    const affected = tailoredProjects.filter((p) =>
-      addable.some(
-        (a) =>
-          containsTerm(p.tech, a.keyword) ||
-          p.bullets.some((b) => containsTerm(b, a.keyword))
-      )
-    );
-    if (affected.length) {
-      const llm = await llmJson<{ bullets?: Record<string, string[]> }>({
-        system:
-          "You polish resume bullets. Rules: use ONLY the facts given — never invent a skill, tool or metric. Keep every keyword you are told to keep inside that project's bullets. Reply with strict JSON only: {\"bullets\": {\"<projectId>\": string[]}}. Each bullet starts with a strong action verb and stays under 28 words.",
-        user: JSON.stringify({
-          keepKeywords: addable.map((a) => a.keyword),
-          projects: affected.map((p) => ({
-            projectId: p.projectId,
-            title: p.title,
-            tech: p.tech,
-            bullets: p.bullets,
-          })),
-        }),
-        timeoutMs: 30000,
-        maxTokens: 1600,
-      }).catch(() => null);
-      if (llm?.bullets) {
-        for (const p of affected) {
-          const proposed = llm.bullets[p.projectId];
-          if (
-            Array.isArray(proposed) &&
-            proposed.length > 0 &&
-            proposed.every((x) => typeof x === "string" && x.trim().length > 10)
-          ) {
-            const mustKeep = addable
-              .map((a) => a.keyword)
-              .filter(
-                (kw) =>
-                  containsTerm(p.tech, kw) ||
-                  p.bullets.some((b) => containsTerm(b, kw))
-              );
-            const keepsAll = mustKeep.every((kw) =>
-              proposed.some((b) => containsTerm(b, kw))
-            );
-            if (keepsAll) p.bullets = proposed.map((x) => x.trim());
-          }
-        }
-        appText = buildResumeText(profile, {
-          summary,
-          skills,
-          projects: tailoredProjects,
-          role,
-        });
-      }
-    }
-  }
-
-  const after = checkAtsEngine({
-    resumeText: appText,
-    jdText,
-    sourceType: "saved",
-  });
-  const delta = after.score - before.score;
-
-  /* ── Per-fix points ─────────────────────────────────────────────────
-     Keyword fixes start from their classification points; structural
-     fixes take the exact points their check recovered (before→after
-     diff, excluding the keyword category). The list is then reconciled
-     so the points sum EXACTLY to the measured score delta. */
-  const fixes: FixEntry[] = [];
-  for (const item of addable) {
-    const note = placementNotes.get(item.keyword);
-    fixes.push({
-      label: note
-        ? `Added "${item.keyword}" — Technical Skills + ${note}`
-        : `Added "${item.keyword}" to Technical Skills (from ${item.evidence ?? "your profile"})`,
-      points: item.points,
-      kind: "keyword",
-      keyword: item.keyword,
-    });
-  }
-  const beforeChecks = new Map(
-    before.categories.flatMap((c) => c.checks.map((x) => [x.id, x] as const))
-  );
-  for (const cat of after.categories) {
-    if (cat.id === "keywords") continue;
-    for (const c of cat.checks) {
-      const b = beforeChecks.get(c.id);
-      if (b && c.points > b.points) {
-        fixes.push({
-          label: `Fixed: ${c.label}`,
-          points: c.points - b.points,
-          kind: "structure",
-        });
-      }
-    }
-  }
-
-  if (fixes.length > 0) {
-    // Reconcile in tenths so displayed points sum exactly to the delta.
-    const targetTenths = Math.round(delta * 10);
-    let tenths = fixes.map((f) => Math.round(f.points * 10));
-    let diff = targetTenths - tenths.reduce((a, b) => a + b, 0);
-    const order = fixes
-      .map((_, i) => i)
-      .sort((a, b) => tenths[b] - tenths[a]);
-    let guard = 0;
-    while (diff !== 0 && guard++ < 10000) {
-      let progressed = false;
-      for (const i of order) {
-        if (diff === 0) break;
-        if (diff > 0) {
-          tenths[i] += 1;
-          diff -= 1;
-          progressed = true;
-        } else if (tenths[i] > 0) {
-          tenths[i] -= 1;
-          diff += 1;
-          progressed = true;
-        }
-      }
-      if (!progressed) break;
-    }
-    fixes.forEach((f, i) => {
-      f.points = tenths[i] / 10;
-    });
-    fixes.sort((a, b) => b.points - a.points);
-  }
-
-  const { primary, secondary } = detectDomains(jdText);
-  const baseLabel = base
-    ? base.company
-    : (input.resumeName ?? "Resume").replace(/\s*\((Auto-)?Fixed\)\s*$/i, "");
-  const payload: Omit<Application, "id" | "createdAt" | "status"> = {
-    company: `Auto-Fixed — ${baseLabel}`,
-    role,
-    domainPrimary: base?.domainPrimary ?? primary,
-    domainSecondary: base?.domainSecondary ?? secondary,
-    jdText,
-    summary,
-    skills,
-    projects: tailoredProjects,
-    gaps: gaps.map((g) => g.keyword),
-    atsScore: after.score,
-    text: appText,
+  for (const skill of input.additionalSkills ?? []) if (!skillSupported(skill, skills)) skills.push(skill);
+  const keywords = extractKeywords(jdText);
+  const score = (skill: string) => keywords.some(keyword => skillSupported(keyword, [skill])) ? 0 : 1;
+  skills = [...new Set(skills)].sort((a, b) => score(a) - score(b));
+  const sourceFor = (project: TailoredProject): Project => {
+    const original = projects.find(item => item.id === project.projectId);
+    return original ? projectForVariant(original, project.variantId) : { id: project.projectId, title: project.title, year: "", description: project.bullets[0] ?? "", tags: project.tech.split(",").map(tag => tag.trim()).filter(Boolean), domains: [], github: project.github, bullets: project.bullets };
   };
-
+  for (const project of tailoredProjects) project.bullets = roleProjectBullets(sourceFor(project), base?.role ?? "", keywords);
+  const { primary, secondary } = detectDomains(jdText);
+  const summaryKeywords = keywords.filter(keyword => skillSupported(keyword, skills));
+  let summary = buildSummary(profile, base?.role ?? "", base?.domainPrimary ?? primary, skills, tailoredProjects.map(project => project.title), {
+    keywords: summaryKeywords, secondary: base?.domainSecondary ?? secondary,
+    projectEvidence: tailoredProjects.flatMap(project => project.bullets),
+    experienceCount: experience.length,
+  });
+  // Editing is useful even with no addable keywords: rewrite the entire
+  // summary and improve existing bullets, instead of returning early.
+  let generationSource: Application["generationSource"] = "rules";
+  const settings = await getEffectiveSettings().catch(() => null);
+  if (settings?.apiKey) {
+    const llm = await llmJson<{ summary?: string; bullets?: Record<string, string[]> }>({
+      system: RESUME_REWRITE_PROMPT,
+      user: JSON.stringify({ jdText, role: base?.role ?? "", candidate: { title: profile.title, education: profile.education }, skills, currentSummary: base?.summary ?? sections.summary?.join(" "), projects: tailoredProjects.map(project => ({ ...project, description: sourceFor(project).description, sourceBullets: sourceFor(project).bullets })), experience }),
+      timeoutMs: 25000,
+      maxTokens: 2400,
+    });
+    if (llm) {
+      generationSource = "ai";
+      if (typeof llm.summary === "string" && llm.summary.trim().length > 30) summary = trimSummary(llm.summary);
+      for (const project of tailoredProjects) {
+        const proposed = llm.bullets?.[project.projectId];
+        if (validRewrittenBullets(sourceFor(project), proposed, extractKeywords(Array.isArray(proposed) ? proposed.filter(value => typeof value === "string").join(" ") : ""))) project.bullets = distinctBullets([roleProjectBullets(sourceFor(project), base?.role ?? "", keywords)[0], ...proposed.slice(1)]);
+      }
+    }
+  }
+  summary = trimSummary(summary);
+  const role = base?.role ?? "Updated Resume";
+  const payload: Omit<Application, "id" | "createdAt" | "status"> = {
+    company: `Auto-Fixed — ${base?.company ?? input.resumeName ?? "Resume"}`,
+    role, domainPrimary: base?.domainPrimary ?? primary, domainSecondary: base?.domainSecondary ?? secondary,
+    jdText, summary, skills, projects: tailoredProjects, additionalSections, experience,
+    profileSnapshot: structuredClone(profile), resumeTemplate: base?.resumeTemplate ?? "compact",
+    skillGroups: base?.skillGroups, interests: base?.interests, skillLayout: base?.skillLayout,
+    showContactIcons: base?.showContactIcons, showSectionRules: base?.showSectionRules,
+    generationSource, gaps: gaps.map(item => item.keyword), atsScore: 0, text: "",
+  };
+  payload.text = buildResumeText(profile, payload);
+  const after = checkAtsEngine({ resumeText: payload.text, jdText, sourceType: "saved" });
+  payload.atsScore = after.score;
+  const fixes: FixEntry[] = [];
+  if (summary !== (base?.summary ?? sections.summary?.join(" "))) fixes.push({ label: "Rewrote the professional summary for this job", points: 0, kind: "structure" });
+  if (tailoredProjects.some((project, i) => JSON.stringify(project.bullets) !== JSON.stringify(base?.projects[i]?.bullets ?? sections.projects))) fixes.push({ label: "Improved project bullet wording and action verbs", points: 0, kind: "structure" });
+  const keywordDelta = (after.categories.find(category => category.id === "keywords")?.score ?? 0) - (before.categories.find(category => category.id === "keywords")?.score ?? 0);
+  const totalShares = addable.reduce((sum, item) => sum + item.points, 0);
+  for (const item of addable) fixes.push({ label: `Added ${item.keyword}${placements.has(item.keyword) ? ` — ${placements.get(item.keyword)}` : " to Technical Skills"}`, points: totalShares ? Math.round(keywordDelta * item.points / totalShares * 10) / 10 : 0, kind: "keyword", keyword: item.keyword });
+  for (const category of after.categories.filter(category => category.id !== "keywords")) {
+    for (const check of category.checks) {
+      const previous = before.categories.flatMap(category => category.checks).find(item => item.id === check.id);
+      if (previous && check.points > previous.points) fixes.push({ label: `Improved ${check.label}`, points: check.points - previous.points, kind: "structure" });
+    }
+  }
+  if (!fixes.length) fixes.push({ label: "Refreshed the resume using the shared PDF layout", points: 0, kind: "structure" });
+  const delta = after.score - before.score;
+  const adjustment = Math.round((delta - fixes.reduce((sum, fix) => sum + fix.points, 0)) * 10) / 10;
+  if (adjustment) fixes.push({ label: "Other scoring and rounding changes", points: adjustment, kind: "structure" });
   return {
-    report: {
-      improved: delta > 0,
-      beforeScore: before.score,
-      afterScore: after.score,
-      fixes,
-      remainingGaps: gaps,
-      manualSuggestions: [
-        ...gaps.map(
-          (g) =>
-            `True gap: ${g.keyword} (${g.points} pts) — no evidence in your profile or projects. It was NOT added.`
-        ),
-        ...after.issues
-          .slice(0, 4)
-          .map((i) => `${i.label} — ${i.fix}`),
-      ],
-      message:
-        delta > 0
-          ? `Auto-Fix created a new resume: ${before.score} → ${after.score} (+${delta} pts). Open it from the button below — it prints and saves as PDF like any other resume.`
-          : "Auto-Fix built a corrected resume in the standard template, but the score did not rise — the recovered items were offset by rounding or length changes. The new resume was still saved; check the report below.",
-    },
     applicationPayload: payload,
     afterResult: after,
+    report: {
+      improved: delta > 0, beforeScore: before.score, afterScore: after.score, fixes, remainingGaps: gaps,
+      manualSuggestions: [...gaps.map(item => `Review ${item.keyword} in the resume editor or add it to your profile.`), ...after.issues.slice(0, 4).map(issue => `${issue.label} — ${issue.fix}`)],
+      message: `Updated resume saved. ATS: ${before.score} → ${after.score}. ${generationSource === "ai" ? "AI rewrote the summary and project content." : "Summary, bullet wording and formatting were refreshed."}`,
+    },
   };
 }
