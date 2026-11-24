@@ -1,4 +1,4 @@
-import { getRawLlmSettings, saveRawLlmSettings, type RawLlmSettings } from "./db";
+import { canPersistLlmSettings, getRawLlmSettings, saveRawLlmSettings, type RawLlmSettings } from "./db";
 import type { LlmSettingsPublic } from "./types";
 
 export const PROVIDER_PRESETS: Record<
@@ -25,19 +25,30 @@ export const PROVIDER_PRESETS: Record<
 
 export interface EffectiveSettings extends RawLlmSettings {
   source: "database" | "env" | "none";
+  keyEnvVar?: "LLM_API_KEY" | "GROQ_API_KEY";
 }
 
+export const SETTINGS_STORAGE_ERROR =
+  "Vercel cannot permanently save AI settings without a database. Set LLM_API_KEY, LLM_PROVIDER, LLM_BASE_URL and LLM_MODEL in Vercel Environment Variables, then redeploy. Or add DATABASE_URL to save settings in the app.";
+
 export async function getEffectiveSettings(): Promise<EffectiveSettings> {
-  const db = await getRawLlmSettings();
+  // Vercel's /tmp store is different across instances and disappears on restarts.
+  // Never let a warm instance's old settings override deployment configuration.
+  const db = canPersistLlmSettings() ? await getRawLlmSettings() : null;
   if (db && db.apiKey) return { ...db, source: "database" };
-  if (process.env.GROQ_API_KEY) {
+  const genericKey = process.env.LLM_API_KEY?.trim();
+  const keyEnvVar = genericKey ? "LLM_API_KEY" : "GROQ_API_KEY";
+  const envKey = genericKey || process.env.GROQ_API_KEY?.trim();
+  if (envKey) {
+    const provider = process.env.LLM_PROVIDER?.trim() || (genericKey ? "custom" : "groq");
+    const preset = PROVIDER_PRESETS[provider] ?? PROVIDER_PRESETS.custom;
     return {
-      provider: "groq",
-      baseUrl:
-        process.env.LLM_BASE_URL ?? PROVIDER_PRESETS.groq.baseUrl,
-      model: process.env.LLM_MODEL ?? PROVIDER_PRESETS.groq.model,
-      apiKey: process.env.GROQ_API_KEY,
+      provider,
+      baseUrl: (process.env.LLM_BASE_URL?.trim() || preset.baseUrl).replace(/\/+$/, ""),
+      model: process.env.LLM_MODEL?.trim() || preset.model,
+      apiKey: envKey,
       source: "env",
+      keyEnvVar,
     };
   }
   if (db) return { ...db, source: "database" };
@@ -60,8 +71,7 @@ export function providerLabel(provider: string): string {
   return PROVIDER_PRESETS[provider]?.label ?? "LLM";
 }
 
-export async function getPublicSettings(): Promise<LlmSettingsPublic> {
-  const eff = await getEffectiveSettings();
+export function publicSettings(eff: EffectiveSettings): LlmSettingsPublic {
   const label = providerLabel(eff.provider);
   return {
     provider: eff.provider,
@@ -70,10 +80,16 @@ export async function getPublicSettings(): Promise<LlmSettingsPublic> {
     hasKey: !!eff.apiKey,
     maskedKey: maskKey(eff.apiKey),
     statusLabel: eff.apiKey
-      ? `AI: ${label} Connected ✓`
+      ? `AI: ${label} Configured`
       : `AI: No key — add ${label} API key`,
     source: eff.source,
+    canSave: canPersistLlmSettings(),
+    keyEnvVar: eff.keyEnvVar,
   };
+}
+
+export async function getPublicSettings(): Promise<LlmSettingsPublic> {
+  return publicSettings(await getEffectiveSettings());
 }
 
 export async function saveSettings(input: {
@@ -82,11 +98,12 @@ export async function saveSettings(input: {
   model: string;
   apiKey?: string;
 }): Promise<LlmSettingsPublic> {
+  if (!canPersistLlmSettings()) throw new Error(SETTINGS_STORAGE_ERROR);
   const existing = await getRawLlmSettings();
   const apiKey =
     input.apiKey && input.apiKey.trim()
       ? input.apiKey.trim()
-      : (existing?.apiKey ?? "");
+      : (existing?.apiKey || (await getEffectiveSettings()).apiKey);
   await saveRawLlmSettings({
     provider: input.provider,
     baseUrl: input.baseUrl.replace(/\/$/, ""),
@@ -217,17 +234,23 @@ export async function llmJson<T>(opts: {
   }
 }
 
-export async function testConnection(): Promise<{ ok: boolean; message: string }> {
-  const settings = await getEffectiveSettings();
+export async function testConnection(savedSettings?: EffectiveSettings): Promise<{ ok: boolean; message: string }> {
+  const settings = savedSettings ?? await getEffectiveSettings();
   const label = providerLabel(settings.provider);
   if (!settings.apiKey) {
     return {
       ok: false,
-      message: `Add your ${label} API key above and save it first, then tap Test Connection.`,
+      message: canPersistLlmSettings()
+        ? `Add your ${label} API key above and save it first, then tap Test Connection.`
+        : SETTINGS_STORAGE_ERROR,
     };
+  }
+  if (!settings.baseUrl || !settings.model) {
+    return { ok: false, message: "Set a base URL and model for your AI provider. For an environment key, set LLM_BASE_URL and LLM_MODEL, then redeploy." };
   }
   if (
     settings.provider === "groq" &&
+    settings.baseUrl.replace(/\/+$/, "") === PROVIDER_PRESETS.groq.baseUrl &&
     !settings.apiKey.startsWith("gsk_")
   ) {
     return {

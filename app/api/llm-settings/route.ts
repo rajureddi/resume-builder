@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getPublicSettings, saveSettings } from "@/lib/llm";
+import { getPublicSettings, PROVIDER_PRESETS, saveSettings, SETTINGS_STORAGE_ERROR } from "@/lib/llm";
+import { canPersistLlmSettings } from "@/lib/db";
 
 export async function GET() {
   // Only the masked key ever leaves the server.
@@ -7,6 +8,9 @@ export async function GET() {
 }
 
 export async function PUT(req: NextRequest) {
+  if (!canPersistLlmSettings()) {
+    return NextResponse.json({ ok: false, error: SETTINGS_STORAGE_ERROR }, { status: 409 });
+  }
   const body = (await req.json().catch(() => ({}))) as {
     provider?: string;
     baseUrl?: string;
@@ -22,6 +26,7 @@ export async function PUT(req: NextRequest) {
   let warning: string | null = null;
   if (
     body.provider === "groq" &&
+    body.baseUrl.trim().replace(/\/+$/, "") === PROVIDER_PRESETS.groq.baseUrl &&
     body.apiKey &&
     body.apiKey.trim() &&
     !body.apiKey.trim().startsWith("gsk_")

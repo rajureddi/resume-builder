@@ -31,6 +31,10 @@ interface DbShape {
 const usePg = !!process.env.DATABASE_URL;
 let loggedMode = false;
 
+export function canPersistLlmSettings(): boolean {
+  return usePg || !process.env.VERCEL;
+}
+
 function logMode() {
   if (loggedMode) return;
   loggedMode = true;

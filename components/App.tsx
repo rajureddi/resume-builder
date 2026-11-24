@@ -1190,7 +1190,7 @@ function MoreView({ go, authEnabled }: { go: (v: View) => void; authEnabled: boo
         {item("experience", "Experience", "Work roles, internships, dates and accomplishments")}
         {item("skills", "Skills", "Maintain your skill library and choose skills per resume")}
         {item("profile", "My Profile", "Name, contact, summary, skills, education, certifications")}
-        {item("settings", "AI Settings", "Groq API key, provider and model — powers the AI tailoring")}
+        {item("settings", "AI Settings", "API key, provider and model — powers the AI tailoring")}
         {item("iphone", "Add to iPhone", "Put Resume Studio on your Home Screen like a real app")}
       </div>
       {authEnabled && (
@@ -1494,6 +1494,8 @@ function SettingsView({
   const [busy, setBusy] = useState(false);
   const [testing, setTesting] = useState(false);
 
+  useEffect(() => { setCurrent(llm); }, [llm]);
+
   const pickProvider = (prov: string) => {
     setProvider(prov);
     const preset = PRESETS[prov];
@@ -1527,7 +1529,9 @@ function SettingsView({
     setTesting(true);
     setMsg(null);
     try {
-      const data = await api<{ ok: boolean; message: string }>("/api/test-llm", { method: "POST" });
+      const data = await api<{ ok: boolean; message: string; settings: LlmSettingsPublic }>("/api/test-llm", { method: "POST" });
+      setCurrent(data.settings);
+      await refresh();
       setMsg({ kind: data.ok ? "ok" : "err", text: data.message });
     } catch (e) {
       setMsg({ kind: "err", text: e instanceof Error ? e.message : "Test failed" });
@@ -1555,25 +1559,34 @@ function SettingsView({
       <p className="eyebrow">AI / LLM settings</p>
       <h1 className="page-title" style={{ fontSize: 28 }}>Your AI provider</h1>
       <p className="lede">
-        All AI tailoring runs through your own key. The key is stored
-        server-side only and is never shown in full — currently:{" "}
+        All AI tailoring runs through your own key. The key stays
+        server-side and is never shown in full — currently:{" "}
         <strong>{current.maskedKey ?? "no key saved"}</strong> · {current.statusLabel}
-        {current.source === "env" ? " (key coming from the GROQ_API_KEY environment variable)" : ""}
+        {current.source === "env" ? ` (key coming from the ${current.keyEnvVar} environment variable)` : ""}
       </p>
+
+      {!current.canSave && (
+        <p className="form-warn">
+          No database is configured. To keep AI working across restarts, set
+          LLM_API_KEY, LLM_PROVIDER, LLM_BASE_URL and LLM_MODEL in your Vercel
+          project’s Environment Variables, then redeploy. For a custom API URL,
+          use LLM_PROVIDER=custom. To edit and save settings here, add DATABASE_URL.
+        </p>
+      )}
 
       <label className="field">
         <span>Provider</span>
-        <select value={provider} onChange={(e) => pickProvider(e.target.value)}>
+        <select value={provider} onChange={(e) => pickProvider(e.target.value)} disabled={!current.canSave || busy || testing}>
           <option value="groq">Groq (recommended)</option>
           <option value="xai">Grok (xAI)</option>
           <option value="openai">OpenAI</option>
           <option value="custom">Custom (OpenAI-compatible)</option>
         </select>
       </label>
-      <label className="field"><span>Base URL</span><input value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} /></label>
+      <label className="field"><span>Base URL</span><input value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} disabled={!current.canSave || busy || testing} /></label>
       <label className="field">
         <span>Model</span>
-        <input value={model} onChange={(e) => setModel(e.target.value)} list="model-list" />
+        <input value={model} onChange={(e) => setModel(e.target.value)} list="model-list" disabled={!current.canSave || busy || testing} />
         <datalist id="model-list">
           <option value="openai/gpt-oss-120b" />
           <option value="openai/gpt-oss-20b" />
@@ -1590,6 +1603,7 @@ function SettingsView({
           onChange={(e) => setApiKey(e.target.value)}
           placeholder={current.maskedKey ?? "Paste your API key"}
           autoComplete="off"
+          disabled={!current.canSave || busy || testing}
         />
         <span className="hint">{PRESETS[provider]?.hint}</span>
       </label>
@@ -1599,11 +1613,11 @@ function SettingsView({
       ) : null}
 
       <div className="btn-row">
-        <button className="btn btn-primary" onClick={save} disabled={busy}>{busy ? "Saving…" : "Save settings"}</button>
-        <button className="btn" onClick={test} disabled={testing}>
+        <button className="btn btn-primary" onClick={save} disabled={!current.canSave || busy || testing}>{busy ? "Saving…" : "Save settings"}</button>
+        <button className="btn" onClick={test} disabled={busy || testing}>
           {testing ? <><Orb state="connecting" size={20} /> Testing…</> : "Test Connection"}
         </button>
-        {current.hasKey && <button className="btn btn-ghost" onClick={removeKey}>About removing the key</button>}
+        {current.hasKey && current.canSave && <button className="btn btn-ghost" onClick={removeKey}>About removing the key</button>}
       </div>
       <p className="small muted" style={{ marginTop: 14 }}>
         Privacy: your resume data is sent only to the provider you choose here,

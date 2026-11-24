@@ -259,4 +259,6 @@ export interface LlmSettingsPublic {
   maskedKey: string | null;
   statusLabel: string;
   source: "database" | "env" | "none";
+  canSave: boolean;
+  keyEnvVar?: "LLM_API_KEY" | "GROQ_API_KEY";
 }

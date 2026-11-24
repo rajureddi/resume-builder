@@ -100,13 +100,38 @@ git push -u origin main
 
 | Variable | Required | What it does |
 |---|---|---|
-| `DATABASE_URL` | **Yes on Vercel** | Neon Postgres connection string. Tables auto-create and seed on first run. Without it the app falls back to a JSON file in `/tmp` — data will NOT persist between deploys/restarts. |
+| `DATABASE_URL` | **For saved data on Vercel** | Neon Postgres connection string. Tables auto-create and seed on first run. Without it resumes/profile changes use temporary storage and will NOT persist between instances, deploys or restarts. AI can use environment variables without a database. |
 | `APP_PASSWORD` | **Strongly recommended** | Site lock. The Vercel URL is public — anyone with the link must enter this password. Without it the site (and your data + API key usage) is open to anyone. |
 | `SESSION_SECRET` | Recommended | Long random string used to sign the login cookie. |
 | `GROQ_API_KEY` | Optional | Your Groq key (`gsk_…`, from console.groq.com → API Keys) as an env fallback. You can instead paste the key inside the app (More → AI Settings); the in-app key is saved to the database. |
-| `LLM_BASE_URL` | Optional | Default `https://api.groq.com/openai/v1` |
-| `LLM_MODEL` | Optional | Default `openai/gpt-oss-120b` |
+| `LLM_API_KEY` | Optional | Key for any OpenAI-compatible provider. Takes precedence over `GROQ_API_KEY`. Stored only on the server. |
+| `LLM_PROVIDER` | Optional | `custom`, `groq`, `xai` or `openai`. Defaults to `custom` with `LLM_API_KEY`, otherwise `groq`. |
+| `LLM_BASE_URL` | Required for `custom` | API base URL, without `/chat/completions`. Other providers use their preset URL when omitted. |
+| `LLM_MODEL` | Required for `custom` | Model supported by your endpoint. Other providers use their preset model when omitted. |
 | `DATA_FILE` | Optional | Path for the JSON fallback store (local dev only). |
+
+## AI on Vercel without a database
+
+Vercel's temporary file store is not shared reliably between requests. An API
+key pasted into the app can appear saved, then disappear when Test Connection
+runs on another instance. On Vercel without `DATABASE_URL`, in-app AI saving is
+disabled and AI settings come from environment variables instead.
+
+For a custom endpoint, add these variables under **Vercel → Project → Settings
+→ Environment Variables**, with the Production scope (and Preview if needed):
+
+```dotenv
+LLM_API_KEY=your_actual_provider_key
+LLM_PROVIDER=custom
+LLM_BASE_URL=https://your-provider.example/api/v1
+LLM_MODEL=your_model_name
+```
+
+Deploy the updated code, then redeploy after changing environment variables.
+Open **More → AI Settings → Test Connection** to verify the provider replies.
+The Configured badge means a key is present; the connection test verifies it.
+You do not need a database for this AI configuration. Saved resumes and profile
+changes still need `DATABASE_URL` to persist on Vercel.
 
 ## Set up Neon (free Postgres)
 
@@ -127,7 +152,7 @@ git push -u origin main
    `openai/gpt-oss-120b`. Paste your Groq key → **Save** → **Test
    Connection**. You should see a success message with the model's reply.
    (If you set `GROQ_API_KEY` as an env var instead, the badge already shows
-   "Groq Connected".)
+   "Groq Configured".)
 3. Run your first check: **ATS Check → Upload** your current resume PDF →
    paste a JD → **Run ATS Check**.
 4. Build your first tailored resume: **Build** → company, role, paste JD →
