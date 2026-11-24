@@ -1,3 +1,4 @@
+import { withStudioData } from "@/lib/requestDb";
 import { NextRequest, NextResponse } from "next/server";
 import {
   addProjectIdea,
@@ -13,11 +14,11 @@ import { analyzeJobRules } from "@/lib/tailor";
 // reads this list. Convert (…/[id]/convert) is the only way an idea
 // becomes a real project.
 
-export async function GET() {
+async function handleGET() {
   return NextResponse.json({ ok: true, ideas: await listProjectIdeas() });
 }
 
-export async function POST(req: NextRequest) {
+async function handlePOST(req: NextRequest) {
   const body = (await req.json().catch(() => ({}))) as {
     jdText?: string;
     company?: string;
@@ -81,3 +82,6 @@ export async function POST(req: NextRequest) {
     { status: 400 }
   );
 }
+
+export const GET = withStudioData(handleGET);
+export const POST = withStudioData(handlePOST);

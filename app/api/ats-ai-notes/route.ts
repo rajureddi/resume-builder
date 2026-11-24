@@ -1,3 +1,4 @@
+import { withStudioData } from "@/lib/requestDb";
 import { NextRequest, NextResponse } from "next/server";
 import { updateAtsCheckAiNotes } from "@/lib/db";
 import { getEffectiveSettings, llmChat, providerLabel } from "@/lib/llm";
@@ -6,14 +7,15 @@ export const maxDuration = 60;
 
 // Optional AI judgement notes. Completely separate from the deterministic
 // score — the score never waits for, or changes because of, this route.
-export async function POST(req: NextRequest) {
+async function handlePOST(req: NextRequest) {
   const body = (await req.json().catch(() => ({}))) as {
     checkId?: string;
     resumeText?: string;
     jdText?: string;
     score?: number;
+    llmSettings?: unknown;
   };
-  const settings = await getEffectiveSettings();
+  const settings = await getEffectiveSettings(body.llmSettings);
   if (!settings.apiKey) {
     return NextResponse.json({
       ok: true,
@@ -36,6 +38,7 @@ export async function POST(req: NextRequest) {
       ],
       timeoutMs: 20000,
       maxTokens: 500,
+      settings,
     });
     if (body.checkId) {
       await updateAtsCheckAiNotes(body.checkId, notes.trim());
@@ -52,3 +55,5 @@ export async function POST(req: NextRequest) {
     });
   }
 }
+
+export const POST = withStudioData(handlePOST);

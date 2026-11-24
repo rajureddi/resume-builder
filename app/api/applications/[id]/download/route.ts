@@ -1,3 +1,4 @@
+import { withStudioData } from "@/lib/requestDb";
 import { NextRequest, NextResponse } from "next/server";
 import { getApplication, getProfile } from "@/lib/db";
 import {
@@ -10,13 +11,14 @@ import {
 type Ctx = { params: Promise<{ id: string }> };
 
 // Real file downloads for one saved resume, generated from that resume's
-// own content. ?format=pdf → generated .pdf file; ?format=docx → .docx
-// file; ?format=txt → plain text. Every format is a direct attachment
+// own browser-supplied content. POST { studioData, format } supports pdf,
+// docx and txt. Every format is a direct attachment
 // download — PDF included (built server-side with pdf-lib, never the
 // browser print flow).
-export async function GET(req: NextRequest, ctx: Ctx) {
+async function handlePOST(req: NextRequest, ctx: Ctx) {
   const { id } = await ctx.params;
-  const format = (req.nextUrl.searchParams.get("format") ?? "txt").toLowerCase();
+  const body = await req.json().catch(() => ({}));
+  const format = typeof body?.format === "string" ? body.format.toLowerCase() : "txt";
 
   const [application, profile] = await Promise.all([
     getApplication(id),
@@ -63,4 +65,10 @@ export async function GET(req: NextRequest, ctx: Ctx) {
     { ok: false, error: "format must be pdf, docx or txt" },
     { status: 400 }
   );
+}
+
+export const POST = withStudioData(handlePOST, { requireSnapshot: true });
+
+export async function GET() {
+  return NextResponse.json({ error: "Download this resume from the browser using POST with its local data." }, { status: 405 });
 }

@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { CONTACT_ICONS } from "@/lib/contactIcons";
+import { api } from "@/lib/apiClient";
 import type { Application, ResumeLayout } from "@/lib/types";
 
 function Pages({ layout }: { layout: ResumeLayout }) {
@@ -25,10 +26,8 @@ export default function ResumePreview({ app, onReady }: { app: Application; onRe
     setLayout(null);
     setError("");
     onReady(false);
-    fetch(`/api/applications/${app.id}/layout`, { signal: controller.signal, cache: "no-store" })
-      .then(async response => {
-        const data = await response.json();
-        if (!response.ok) throw new Error(data.error ?? "Could not load the resume preview.");
+    api<{ layout: ResumeLayout }>(`/api/applications/${app.id}/layout`, { method: "POST", json: {}, signal: controller.signal, cache: "no-store" })
+      .then(data => {
         if (!controller.signal.aborted) { setLayout(data.layout); onReady(true); }
       })
       .catch(cause => { if (!controller.signal.aborted) setError(cause instanceof Error ? cause.message : "Could not load the resume preview."); });

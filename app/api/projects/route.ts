@@ -1,13 +1,14 @@
+import { withStudioData } from "@/lib/requestDb";
 import { NextRequest, NextResponse } from "next/server";
 import { createProject, listProjects } from "@/lib/db";
 import type { Project } from "@/lib/types";
 import { validProjectFields } from "@/lib/projectValidation";
 
-export async function GET() {
+async function handleGET() {
   return NextResponse.json({ ok: true, projects: await listProjects() });
 }
 
-export async function POST(req: NextRequest) {
+async function handlePOST(req: NextRequest) {
   const body = (await req.json().catch(() => null)) as Omit<Project, "id"> | null;
   if (!body || !validProjectFields(body as unknown as Record<string, unknown>)) {
     return NextResponse.json(
@@ -29,3 +30,6 @@ export async function POST(req: NextRequest) {
   });
   return NextResponse.json({ ok: true, project });
 }
+
+export const GET = withStudioData(handleGET);
+export const POST = withStudioData(handlePOST);

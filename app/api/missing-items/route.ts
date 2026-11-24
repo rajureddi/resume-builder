@@ -1,3 +1,4 @@
+import { withStudioData } from "@/lib/requestDb";
 import { NextRequest, NextResponse } from "next/server";
 import { getProfile, listProjects } from "@/lib/db";
 import { classifyMissingKeywords } from "@/lib/ats";
@@ -6,7 +7,7 @@ import { classifyMissingKeywords } from "@/lib/ats";
 // addable (evidenced in the user's profile/projects) vs true gaps,
 // each with its points. Used for checks saved before missingItems
 // existed; new checks carry the same data from /api/check-ats.
-export async function POST(req: NextRequest) {
+async function handlePOST(req: NextRequest) {
   const body = (await req.json().catch(() => ({}))) as {
     resumeText?: string;
     jdText?: string;
@@ -30,3 +31,5 @@ export async function POST(req: NextRequest) {
     gapPoints: Math.round(gaps.reduce((a, m) => a + m.points, 0) * 10) / 10,
   });
 }
+
+export const POST = withStudioData(handlePOST);

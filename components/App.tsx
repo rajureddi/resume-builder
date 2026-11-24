@@ -11,6 +11,11 @@ import ProjectEditor from "./ProjectEditor";
 import ProjectTemplateGallery from "./ProjectTemplateGallery";
 import ResumePreview from "./ResumePreview";
 import ResumeEditor, { type ResumeEdits } from "./ResumeEditor";
+import SettingsView from "./SettingsView";
+import { getLocalPublicSettings, LOCAL_LLM_SETTINGS_KEY } from "@/lib/localLlmSettings";
+import { downloadResume } from "@/lib/resumeDownload";
+import { BROWSER_STUDIO_KEY } from "@/lib/browserDb";
+import BrowserStorageTools from "./BrowserStorageTools";
 import type {
   Application,
   AtsCheck,
@@ -114,15 +119,27 @@ export default function App() {
   }, []);
 
   const refreshBoot = useCallback(async () => {
-    const data = await api<Boot & { ok: boolean }>("/api/bootstrap");
-    setBoot(data);
-    return data;
+    const [data, site] = await Promise.all([
+      api<Boot & { ok: boolean }>("/api/bootstrap"),
+      api<{ authEnabled: boolean }>("/api/site-config").catch(() => ({ authEnabled: false })),
+    ]);
+    const next = { ...data, authEnabled: site.authEnabled, llm: getLocalPublicSettings() };
+    setBoot(next);
+    return next;
   }, []);
 
   useEffect(() => {
     Promise.all([refreshBoot(), new Promise((r) => setTimeout(r, 1000))]).catch(
       (e) => setBootError(e instanceof Error ? e.message : "Failed to load the app")
     );
+  }, [refreshBoot]);
+
+  useEffect(() => {
+    const changed = (event: StorageEvent) => {
+      if (event.key === LOCAL_LLM_SETTINGS_KEY || event.key === BROWSER_STUDIO_KEY || event.key === null) refreshBoot().catch(() => undefined);
+    };
+    window.addEventListener("storage", changed);
+    return () => window.removeEventListener("storage", changed);
   }, [refreshBoot]);
 
   const go = (v: View) => {
@@ -246,7 +263,7 @@ export default function App() {
           />
         )}
         {view === "more" && (
-          <MoreView go={go} authEnabled={boot.authEnabled} />
+          <MoreView go={go} authEnabled={boot.authEnabled} refresh={refreshBoot} />
         )}
         {view === "projects" && (
           <ProjectsView
@@ -477,6 +494,14 @@ function ResumeDetailView({
     } finally { setSaving(false); }
   };
   const [deleting, setDeleting] = useState(false);
+  const [downloading, setDownloading] = useState(false);
+
+  const download = async (format: "pdf" | "docx" | "txt") => {
+    setDownloading(true);
+    try { await downloadResume(app.id, format); }
+    catch (error) { showToast(error instanceof Error ? error.message : "Could not download the resume"); }
+    finally { setDownloading(false); }
+  };
 
   const copyText = async () => {
     try {
@@ -488,9 +513,10 @@ function ResumeDetailView({
   };
 
   const changeStatus = async (s: string) => {
-    setStatus(s);
     try {
-      await api(`/api/applications/${app.id}`, { method: "PATCH", json: { status: s } });
+      const data = await api<{ application: Application }>(`/api/applications/${app.id}`, { method: "PATCH", json: { status: s } });
+      setStatus(s);
+      onSaved(data.application);
       showToast(`Status: ${s}`);
     } catch {
       showToast("Could not save the status");
@@ -500,8 +526,13 @@ function ResumeDetailView({
   const remove = async () => {
     if (!window.confirm(`Delete the ${app.company} resume? This cannot be undone.`)) return;
     setDeleting(true);
-    await api(`/api/applications/${app.id}`, { method: "DELETE" }).catch(() => undefined);
-    onDeleted();
+    try {
+      await api(`/api/applications/${app.id}`, { method: "DELETE" });
+      onDeleted();
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : "Could not delete the resume");
+      setDeleting(false);
+    }
   };
 
   return (
@@ -524,9 +555,9 @@ function ResumeDetailView({
 
       <p className="eyebrow">Download this resume</p>
       <div className="btn-row" style={{ margin: "8px 0 6px" }}>
-        <a className="btn btn-forest" href={`/api/applications/${app.id}/download?format=pdf`}>PDF</a>
-        <a className="btn" href={`/api/applications/${app.id}/download?format=docx`}>DOCX</a>
-        <a className="btn" href={`/api/applications/${app.id}/download?format=txt`}>TXT</a>
+        <button className="btn btn-forest" disabled={downloading} onClick={() => download("pdf")}>PDF</button>
+        <button className="btn" disabled={downloading} onClick={() => download("docx")}>DOCX</button>
+        <button className="btn" disabled={downloading} onClick={() => download("txt")}>TXT</button>
       </div>
       <p className="small muted" style={{ margin: "0 0 18px" }}>
         The PDF matches the preview below. DOCX is an editable copy; TXT contains the resume text.
@@ -1166,7 +1197,7 @@ function AtsResultView({
 
 /* ───────────────────────── More ───────────────────────── */
 
-function MoreView({ go, authEnabled }: { go: (v: View) => void; authEnabled: boolean }) {
+function MoreView({ go, authEnabled, refresh }: { go: (v: View) => void; authEnabled: boolean; refresh: () => Promise<unknown> }) {
   const logout = async () => {
     await fetch("/api/logout", { method: "POST" }).catch(() => undefined);
     window.location.href = "/login";
@@ -1184,6 +1215,7 @@ function MoreView({ go, authEnabled }: { go: (v: View) => void; authEnabled: boo
     <div>
       <p className="eyebrow">More</p>
       <h1 className="page-title">Studio settings</h1>
+      <p className="small muted">Everything is saved in this browser on this device. Clearing site data removes your studio; other browsers and devices keep separate data.</p>
       <div>
         {item("projects", "Project Library", "Add, edit or remove the projects the studio picks from")}
         {item("build-later", "Build Later", "Project ideas from JDs you don't cover yet — build one, then convert it into a real project")}
@@ -1193,6 +1225,7 @@ function MoreView({ go, authEnabled }: { go: (v: View) => void; authEnabled: boo
         {item("settings", "AI Settings", "API key, provider and model — powers the AI tailoring")}
         {item("iphone", "Add to iPhone", "Put Resume Studio on your Home Screen like a real app")}
       </div>
+      <BrowserStorageTools refresh={refresh} />
       {authEnabled && (
         <>
           <hr className="rule" />
@@ -1447,183 +1480,6 @@ function ProfileView({
         <textarea value={certText} onChange={(e) => setCertText(e.target.value)} />
       </label>
       <button className="btn btn-primary btn-block" onClick={save} disabled={busy}>{busy ? "Saving…" : "Save profile"}</button>
-    </div>
-  );
-}
-
-/* ───────────────────────── AI Settings ───────────────────────── */
-
-const PRESETS: Record<string, { baseUrl: string; model: string; hint: string }> = {
-  groq: {
-    baseUrl: "https://api.groq.com/openai/v1",
-    model: "openai/gpt-oss-120b",
-    hint: "Get your key at console.groq.com → API Keys. Groq keys start with gsk_.",
-  },
-  xai: {
-    baseUrl: "https://api.x.ai/v1",
-    model: "grok-4",
-    hint: "Get your key at console.x.ai → API Keys.",
-  },
-  openai: {
-    baseUrl: "https://api.openai.com/v1",
-    model: "gpt-4o-mini",
-    hint: "Get your key at platform.openai.com → API Keys.",
-  },
-  custom: { baseUrl: "", model: "", hint: "Any OpenAI-compatible endpoint." },
-};
-
-function SettingsView({
-  llm,
-  goBack,
-  goHome,
-  refresh,
-  showToast,
-}: {
-  llm: LlmSettingsPublic;
-  goBack: () => void;
-  goHome: () => void;
-  refresh: () => Promise<unknown>;
-  showToast: (m: string) => void;
-}) {
-  const [provider, setProvider] = useState(llm.provider);
-  const [baseUrl, setBaseUrl] = useState(llm.baseUrl);
-  const [model, setModel] = useState(llm.model);
-  const [apiKey, setApiKey] = useState("");
-  const [current, setCurrent] = useState<LlmSettingsPublic>(llm);
-  const [msg, setMsg] = useState<{ kind: "ok" | "err" | "warn"; text: string } | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [testing, setTesting] = useState(false);
-
-  useEffect(() => { setCurrent(llm); }, [llm]);
-
-  const pickProvider = (prov: string) => {
-    setProvider(prov);
-    const preset = PRESETS[prov];
-    if (preset) {
-      setBaseUrl(preset.baseUrl);
-      setModel(preset.model);
-    }
-  };
-
-  const save = async () => {
-    setBusy(true);
-    setMsg(null);
-    try {
-      const data = await api<{ settings: LlmSettingsPublic; warning?: string | null }>("/api/llm-settings", {
-        method: "PUT",
-        json: { provider, baseUrl, model, apiKey: apiKey || undefined },
-      });
-      setCurrent(data.settings);
-      setApiKey("");
-      await refresh();
-      if (data.warning) setMsg({ kind: "warn", text: data.warning });
-      else setMsg({ kind: "ok", text: `Saved. ${data.settings.statusLabel}` });
-    } catch (e) {
-      setMsg({ kind: "err", text: e instanceof Error ? e.message : "Save failed" });
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const test = async () => {
-    setTesting(true);
-    setMsg(null);
-    try {
-      const data = await api<{ ok: boolean; message: string; settings: LlmSettingsPublic }>("/api/test-llm", { method: "POST" });
-      setCurrent(data.settings);
-      await refresh();
-      setMsg({ kind: data.ok ? "ok" : "err", text: data.message });
-    } catch (e) {
-      setMsg({ kind: "err", text: e instanceof Error ? e.message : "Test failed" });
-    } finally {
-      setTesting(false);
-    }
-  };
-
-  const removeKey = async () => {
-    if (!window.confirm("Remove the saved API key? The app will use the built-in engine until a new key is saved.")) return;
-    await api("/api/llm-settings", {
-      method: "PUT",
-      json: { provider, baseUrl, model, apiKey: " " },
-    }).catch(() => undefined);
-    // Saving a blank-space key is ignored by design; use the dedicated flow:
-    showToast("To replace the key, paste a new one and Save. Keys are never shown in full.");
-  };
-
-  return (
-    <div>
-      <div className="back-row">
-        <button className="back-btn" onClick={goBack}><span className="chev">‹</span> More</button>
-        <button className="home-btn" onClick={goHome}><IconHome /> Home</button>
-      </div>
-      <p className="eyebrow">AI / LLM settings</p>
-      <h1 className="page-title" style={{ fontSize: 28 }}>Your AI provider</h1>
-      <p className="lede">
-        All AI tailoring runs through your own key. The key stays
-        server-side and is never shown in full — currently:{" "}
-        <strong>{current.maskedKey ?? "no key saved"}</strong> · {current.statusLabel}
-        {current.source === "env" ? ` (key coming from the ${current.keyEnvVar} environment variable)` : ""}
-      </p>
-
-      {!current.canSave && (
-        <p className="form-warn">
-          No database is configured. To keep AI working across restarts, set
-          LLM_API_KEY, LLM_PROVIDER, LLM_BASE_URL and LLM_MODEL in your Vercel
-          project’s Environment Variables, then redeploy. For a custom API URL,
-          use LLM_PROVIDER=custom. To edit and save settings here, add DATABASE_URL.
-        </p>
-      )}
-
-      <label className="field">
-        <span>Provider</span>
-        <select value={provider} onChange={(e) => pickProvider(e.target.value)} disabled={!current.canSave || busy || testing}>
-          <option value="groq">Groq (recommended)</option>
-          <option value="xai">Grok (xAI)</option>
-          <option value="openai">OpenAI</option>
-          <option value="custom">Custom (OpenAI-compatible)</option>
-        </select>
-      </label>
-      <label className="field"><span>Base URL</span><input value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} disabled={!current.canSave || busy || testing} /></label>
-      <label className="field">
-        <span>Model</span>
-        <input value={model} onChange={(e) => setModel(e.target.value)} list="model-list" disabled={!current.canSave || busy || testing} />
-        <datalist id="model-list">
-          <option value="openai/gpt-oss-120b" />
-          <option value="openai/gpt-oss-20b" />
-          <option value="llama-3.3-70b-versatile" />
-          <option value="grok-4" />
-          <option value="gpt-4o-mini" />
-        </datalist>
-      </label>
-      <label className="field">
-        <span>API key {current.hasKey ? "(leave blank to keep the saved key)" : ""}</span>
-        <input
-          type="password"
-          value={apiKey}
-          onChange={(e) => setApiKey(e.target.value)}
-          placeholder={current.maskedKey ?? "Paste your API key"}
-          autoComplete="off"
-          disabled={!current.canSave || busy || testing}
-        />
-        <span className="hint">{PRESETS[provider]?.hint}</span>
-      </label>
-
-      {msg ? (
-        <p className={msg.kind === "ok" ? "form-ok" : msg.kind === "warn" ? "form-warn" : "form-error"}>{msg.text}</p>
-      ) : null}
-
-      <div className="btn-row">
-        <button className="btn btn-primary" onClick={save} disabled={!current.canSave || busy || testing}>{busy ? "Saving…" : "Save settings"}</button>
-        <button className="btn" onClick={test} disabled={busy || testing}>
-          {testing ? <><Orb state="connecting" size={20} /> Testing…</> : "Test Connection"}
-        </button>
-        {current.hasKey && current.canSave && <button className="btn btn-ghost" onClick={removeKey}>About removing the key</button>}
-      </div>
-      <p className="small muted" style={{ marginTop: 14 }}>
-        Privacy: your resume data is sent only to the provider you choose here,
-        only when an AI action runs. The ATS score itself never uses the AI —
-        it is calculated by fixed rules inside the app.
-      </p>
     </div>
   );
 }

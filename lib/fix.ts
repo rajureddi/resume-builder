@@ -121,6 +121,7 @@ export async function prepareAutoFix(input: {
   profile: Profile;
   projects: Project[];
   additionalSkills?: string[];
+  llmSettings?: unknown;
 }): Promise<PreparedFix> {
   const { projects } = input;
   const base = input.baseApplication ?? null;
@@ -164,13 +165,14 @@ export async function prepareAutoFix(input: {
   // Editing is useful even with no addable keywords: rewrite the entire
   // summary and improve existing bullets, instead of returning early.
   let generationSource: Application["generationSource"] = "rules";
-  const settings = await getEffectiveSettings().catch(() => null);
+  const settings = await getEffectiveSettings(input.llmSettings).catch(() => null);
   if (settings?.apiKey) {
     const llm = await llmJson<{ summary?: string; bullets?: Record<string, string[]> }>({
       system: RESUME_REWRITE_PROMPT,
       user: JSON.stringify({ jdText, role: base?.role ?? "", candidate: { title: profile.title, education: profile.education }, skills, currentSummary: base?.summary ?? sections.summary?.join(" "), projects: tailoredProjects.map(project => ({ ...project, description: sourceFor(project).description, sourceBullets: sourceFor(project).bullets })), experience }),
       timeoutMs: 25000,
       maxTokens: 2400,
+      settings,
     });
     if (llm) {
       generationSource = "ai";

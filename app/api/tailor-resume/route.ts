@@ -1,3 +1,4 @@
+import { withStudioData } from "@/lib/requestDb";
 import { NextRequest, NextResponse } from "next/server";
 import { createApplication, getProfile, listProjects } from "@/lib/db";
 import { checkAtsEngine } from "@/lib/ats";
@@ -12,7 +13,7 @@ import type { Analysis } from "@/lib/types";
 
 export const maxDuration = 60;
 
-export async function POST(req: NextRequest) {
+async function handlePOST(req: NextRequest) {
   const body = await req.json().catch(() => null);
   if (!body || typeof body.company !== "string" || !body.company.trim() || typeof body.role !== "string" || !body.role.trim() || typeof body.jdText !== "string" || body.jdText.trim().length < 30 || body.jdText.length > 20000) {
     return NextResponse.json({ error: "Enter a company, role and a complete job description." }, { status: 400 });
@@ -39,7 +40,7 @@ export async function POST(req: NextRequest) {
     selectedProjectIds: body.selectedProjectIds, projectVariants: body.projectVariants,
     selectedSkills: body.selectedSkills, selectedExperienceIds: body.selectedExperienceIds,
   });
-  const settings = await getEffectiveSettings();
+  const settings = await getEffectiveSettings(body.llmSettings);
   if (settings.apiKey && (tailored.projects.length || tailored.experience?.length)) {
     const llm = await llmJson<{ summary?: string; bullets?: Record<string, string[]>; experienceBullets?: Record<string, string[]> }>({
       system: RESUME_REWRITE_PROMPT,
@@ -53,7 +54,7 @@ export async function POST(req: NextRequest) {
         }),
         experience: tailored.experience,
       }),
-      timeoutMs: 25000, maxTokens: 3000,
+      timeoutMs: 25000, maxTokens: 3000, settings,
     });
     if (llm) {
       if (typeof llm.summary === "string" && llm.summary.trim().length > 40) { tailored.summary = trimSummary(llm.summary); tailored.generationSource = "ai"; }
@@ -76,3 +77,5 @@ export async function POST(req: NextRequest) {
   const ideasAdded = await recordIdeasForJd({ jdText: body.jdText, analysis, projects, company: body.company, role: body.role }).catch(() => []);
   return NextResponse.json({ ok: true, application, ideasAdded });
 }
+
+export const POST = withStudioData(handlePOST);

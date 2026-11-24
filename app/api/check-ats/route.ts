@@ -1,3 +1,4 @@
+import { withStudioData } from "@/lib/requestDb";
 import { NextRequest, NextResponse } from "next/server";
 import { createAtsCheck, getProfile, listProjects } from "@/lib/db";
 import { checkAtsEngine, classifyMissingKeywords } from "@/lib/ats";
@@ -6,7 +7,7 @@ import { checkAtsEngine, classifyMissingKeywords } from "@/lib/ats";
 // deterministic — same resume + same JD always returns the same score.
 // Missing keywords are classified (addable vs true gap, with points)
 // from the user's own profile/project evidence — also rule-based.
-export async function POST(req: NextRequest) {
+async function handlePOST(req: NextRequest) {
   const body = (await req.json().catch(() => ({}))) as {
     resumeText?: string;
     jdText?: string;
@@ -45,3 +46,5 @@ export async function POST(req: NextRequest) {
   });
   return NextResponse.json({ ok: true, check });
 }
+
+export const POST = withStudioData(handlePOST);

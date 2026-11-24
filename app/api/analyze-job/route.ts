@@ -1,3 +1,4 @@
+import { withStudioData } from "@/lib/requestDb";
 import { NextRequest, NextResponse } from "next/server";
 import { getProfile, listProjects } from "@/lib/db";
 import { recordIdeasForJd } from "@/lib/ideas";
@@ -11,11 +12,12 @@ import type { Analysis } from "@/lib/types";
 
 export const maxDuration = 60;
 
-export async function POST(req: NextRequest) {
-  const { jdText, company, role } = (await req.json().catch(() => ({}))) as {
+async function handlePOST(req: NextRequest) {
+  const { jdText, company, role, llmSettings } = (await req.json().catch(() => ({}))) as {
     jdText?: string;
     company?: string;
     role?: string;
+    llmSettings?: unknown;
   };
   if (!jdText || jdText.trim().length < 30) {
     return NextResponse.json(
@@ -27,7 +29,7 @@ export async function POST(req: NextRequest) {
   let analysis: Analysis = analyzeJobRules(jdText, profile, projects, role);
 
   // Optional LLM refinement — any failure silently keeps the rule result.
-  const settings = await getEffectiveSettings();
+  const settings = await getEffectiveSettings(llmSettings);
   if (settings.apiKey) {
     const llm = await llmJson<{
       domainPrimary?: string;
@@ -41,6 +43,7 @@ export async function POST(req: NextRequest) {
       user: jdText.slice(0, 6000),
       timeoutMs: 20000,
       maxTokens: 800,
+      settings,
     });
     if (
       llm &&
@@ -84,3 +87,5 @@ export async function POST(req: NextRequest) {
 
   return NextResponse.json({ ok: true, analysis, ideasAdded });
 }
+
+export const POST = withStudioData(handlePOST);

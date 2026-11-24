@@ -1,3 +1,4 @@
+import { withStudioData } from "@/lib/requestDb";
 import { NextRequest, NextResponse } from "next/server";
 import {
   deleteApplication,
@@ -12,7 +13,7 @@ import type { Application, ResumeTemplate } from "@/lib/types";
 
 type Ctx = { params: Promise<{ id: string }> };
 
-export async function GET(_req: NextRequest, ctx: Ctx) {
+async function handleGET(_req: NextRequest, ctx: Ctx) {
   const { id } = await ctx.params;
   const application = await getApplication(id);
   if (!application) {
@@ -21,7 +22,7 @@ export async function GET(_req: NextRequest, ctx: Ctx) {
   return NextResponse.json({ ok: true, application });
 }
 
-export async function PATCH(req: NextRequest, ctx: Ctx) {
+async function handlePATCH(req: NextRequest, ctx: Ctx) {
   const { id } = await ctx.params;
   const body = await req.json().catch(() => null);
   if (!body || typeof body !== "object" || Array.isArray(body)) return NextResponse.json({ error: "Invalid resume changes" }, { status: 400 });
@@ -77,8 +78,12 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
   return NextResponse.json({ ok: true, application });
 }
 
-export async function DELETE(_req: NextRequest, ctx: Ctx) {
+async function handleDELETE(_req: NextRequest, ctx: Ctx) {
   const { id } = await ctx.params;
   const removed = await deleteApplication(id);
   return NextResponse.json({ ok: removed });
 }
+
+export const GET = withStudioData(handleGET);
+export const PATCH = withStudioData(handlePATCH);
+export const DELETE = withStudioData(handleDELETE);

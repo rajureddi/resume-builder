@@ -21,15 +21,15 @@ ATS-friendly resume for **every** job application:
   it (a Computer Vision application reads differently from an Android one).
   Summaries are **short — 3–4 sentences (~55–75 words)** — and a hard cap
   trims any summary to its first 4 sentences before an application is
-  saved, on every path (rule composer, Groq rewrite, Auto-Fix).
+  saved, on every path (rule composer, AI rewrite, Auto-Fix).
   The profile's static summary is never copied into a generated resume, and
-  previously saved resumes keep their own summaries untouched. Groq polishes
+  previously saved resumes keep their own summaries untouched. AI polishes
   the wording when a key is set; the rule-based composer is the fallback.
   Auto-Fix-created resumes get a fresh per-role summary too.
 - **Downloads** — every saved resume (including the one you land on right
   after generating) has a **Download** area: **PDF**, **DOCX** and **TXT** —
   real files generated from that resume's own content via
-  `GET /api/applications/<id>/download?format=pdf|docx|txt`, named like
+  a request containing the resume saved in your browser, named like
   `Raju-Bandam-Resume-<Company>-<Role>.pdf`. The PDF is generated
   server-side with pdf-lib (clean single-column A4, same content as the
   paper view) and downloads directly as a file — clicking **PDF** never
@@ -44,10 +44,13 @@ ATS-friendly resume for **every** job application:
   projects** — they never appear in resumes, ATS evidence or Auto-Fix.
   Once you've actually built one, tap **Convert to project** and it joins
   your library like any other project; you can also delete ideas.
-- **Your own Groq key** — AI tailoring runs through Groq
-  (`openai/gpt-oss-120b` by default) via an env var or the in-app Settings
-  page. xAI / OpenAI / any OpenAI-compatible endpoint also works. Rule-based
-  fallback keeps everything running with no key.
+- **Your own API key** — choose Groq, xAI, OpenAI or any OpenAI-compatible
+  endpoint in **More → AI Settings**, then choose **Save on this device**.
+  Change the provider, API key, base URL or model whenever needed. Rule-based
+  fallback keeps the app working without an API key.
+- **Browser storage** — profile, projects, skills, experience, saved resumes,
+  ATS history, project ideas and API settings stay in this browser's local
+  storage. Reloading the page or restarting Vercel does not erase them.
 - **Premium solid design** — warm ivory, ink black, one deep-forest accent, no
   gradients, thinking-orbs loading animations, back arrows on every
   sub-screen, bottom nav, iPhone Add to Home Screen, and a **dedicated print
@@ -64,8 +67,8 @@ npm install
 npm run dev        # http://localhost:3000
 ```
 
-Without any env vars the app uses a local JSON file store (`data/db.json`) —
-fine for local use. For Vercel, set the env vars below so data persists.
+No database or AI environment variables are needed. The app saves your data
+in browser local storage both locally and on Vercel.
 
 ## Push to GitHub
 
@@ -85,74 +88,49 @@ git push -u origin main
 ```
 
 > `.gitignore` already excludes `.env*.local`, `node_modules`, `.next` and the
-> local data file. **Never commit a real API key.**
+> generated files. **Never commit a real API key.**
 
 ## Deploy on Vercel
 
-1. Go to [vercel.com](https://vercel.com) → **Add New → Project** → import the
-   GitHub repo.
-2. Framework preset: **Next.js** (auto-detected). Root directory: the repo
-   root. No build settings need changing.
-3. Add the **Environment Variables** below (Production + Preview).
-4. **Deploy.** Every later `git push` redeploys automatically.
+1. Go to [vercel.com](https://vercel.com) → **Add New → Project** and import
+   the GitHub repository.
+2. Use the **Next.js** framework preset and repository root. No build
+   settings need changing.
+3. Optionally add `APP_PASSWORD` and `SESSION_SECRET` to lock access to the
+   app. Copy `.env.example` for a local site lock if wanted.
+4. Deploy. Later GitHub pushes redeploy automatically.
 
-## Environment variables
+`DATABASE_URL`, `DATA_FILE`, `GROQ_API_KEY` and `LLM_*` environment variables
+are no longer used for storage or AI settings. Enter your API settings in
+the app instead; changing them does not require redeployment.
 
-| Variable | Required | What it does |
-|---|---|---|
-| `DATABASE_URL` | **For saved data on Vercel** | Neon Postgres connection string. Tables auto-create and seed on first run. Without it resumes/profile changes use temporary storage and will NOT persist between instances, deploys or restarts. AI can use environment variables without a database. |
-| `APP_PASSWORD` | **Strongly recommended** | Site lock. The Vercel URL is public — anyone with the link must enter this password. Without it the site (and your data + API key usage) is open to anyone. |
-| `SESSION_SECRET` | Recommended | Long random string used to sign the login cookie. |
-| `GROQ_API_KEY` | Optional | Your Groq key (`gsk_…`, from console.groq.com → API Keys) as an env fallback. You can instead paste the key inside the app (More → AI Settings); the in-app key is saved to the database. |
-| `LLM_API_KEY` | Optional | Key for any OpenAI-compatible provider. Takes precedence over `GROQ_API_KEY`. Stored only on the server. |
-| `LLM_PROVIDER` | Optional | `custom`, `groq`, `xai` or `openai`. Defaults to `custom` with `LLM_API_KEY`, otherwise `groq`. |
-| `LLM_BASE_URL` | Required for `custom` | API base URL, without `/chat/completions`. Other providers use their preset URL when omitted. |
-| `LLM_MODEL` | Required for `custom` | Model supported by your endpoint. Other providers use their preset model when omitted. |
-| `DATA_FILE` | Optional | Path for the JSON fallback store (local dev only). |
+## Where your data is saved
 
-## AI on Vercel without a database
+The app saves profile details, projects, skills, experience, generated
+resumes, ATS history, Build Later ideas and API settings in **local storage
+on the current browser and device**. Vercel does not store these records.
 
-Vercel's temporary file store is not shared reliably between requests. An API
-key pasted into the app can appear saved, then disappear when Test Connection
-runs on another instance. On Vercel without `DATABASE_URL`, in-app AI saving is
-disabled and AI settings come from environment variables instead.
+AI and document processing still need server requests. The browser sends a
+snapshot of the relevant data for the current calculation or export. When
+an AI action runs, it also sends the saved API key for that request so the
+server can forward it to the selected provider. The server processes the
+request in memory and returns the result; it does not save the data or key.
+The browser saves the result locally.
 
-For a custom endpoint, add these variables under **Vercel → Project → Settings
-→ Environment Variables**, with the Production scope (and Preview if needed):
-
-```dotenv
-LLM_API_KEY=your_actual_provider_key
-LLM_PROVIDER=custom
-LLM_BASE_URL=https://your-provider.example/api/v1
-LLM_MODEL=your_model_name
-```
-
-Deploy the updated code, then redeploy after changing environment variables.
-Open **More → AI Settings → Test Connection** to verify the provider replies.
-The Configured badge means a key is present; the connection test verifies it.
-You do not need a database for this AI configuration. Saved resumes and profile
-changes still need `DATABASE_URL` to persist on Vercel.
-
-## Set up Neon (free Postgres)
-
-1. Go to [neon.tech](https://neon.tech) → sign up → **Create project**
-   (name it e.g. `resume-studio`, region close to you).
-2. In the project dashboard open **Connection Details** and copy the
-   **pooled** connection string (it starts with `postgres://…` and contains
-   `-pooler` in the host).
-3. Paste it as `DATABASE_URL` in Vercel (and in `.env.local` if you want your
-   local run to use the same database).
-4. Nothing else to do — the app creates its table (`rb_store`) and seeds your
-   profile + projects automatically on first request.
+Data is separate for each website origin: localhost, a Vercel preview URL
+and the production URL each have their own storage. Other browsers and
+devices need their own data and settings. Clearing site data removes local
+records and the saved API key. Private browsing storage may disappear when
+that browsing session closes. Browser storage must be enabled to save.
 
 ## After deploying — checklist
 
-1. Open your Vercel URL and log in with `APP_PASSWORD`.
-2. Go to **More → AI Settings** — Groq is pre-selected with model
-   `openai/gpt-oss-120b`. Paste your Groq key → **Save** → **Test
-   Connection**. You should see a success message with the model's reply.
-   (If you set `GROQ_API_KEY` as an env var instead, the badge already shows
-   "Groq Configured".)
+1. Open your Vercel URL and log in if you configured `APP_PASSWORD`.
+2. Go to **More → AI Settings**, choose your provider, base URL and model,
+   then paste the API key and choose **Save on this device** → **Test
+   Connection**. For a custom API URL, choose **Custom (OpenAI-compatible)**.
+   The Configured badge means a key is saved; the connection test verifies
+   that the provider replies. Use **Remove saved key** to clear API settings.
 3. Run your first check: **ATS Check → Upload** your current resume PDF →
    paste a JD → **Run ATS Check**.
 4. Build your first tailored resume: **Build** → company, role, paste JD →
@@ -173,5 +151,6 @@ changes still need `DATABASE_URL` to persist on Vercel.
 - File uploads are capped at 8 MB (resumes are far smaller). Scanned/image
   PDFs have no readable text — the app tells you plainly, because a real ATS
   fails on them too.
-- To reset all data in Postgres, delete the rows of the `rb_store` table (or
-  drop it) — the app re-seeds on the next request.
+- Saved data uses your browser's storage quota. If saving fails because
+  storage is blocked or full, the app reports the failure instead of
+  claiming the data was saved.

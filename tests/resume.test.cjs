@@ -1,15 +1,10 @@
-const test = require('node:test');
+const nodeTest = require('node:test');
+const test = (name, callback) => nodeTest(name, () => runWithStudioData(undefined, callback));
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const os = require('node:os');
 const path = require('node:path');
 const Module = require('node:module');
 const ts = require('typescript');
-const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'resume-regression-'));
-process.env.DATA_FILE = path.join(temp, 'db.json');
-delete process.env.DATABASE_URL;
-delete process.env.GROQ_API_KEY;
-
 require.extensions['.ts'] = (module, filename) => module._compile(ts.transpileModule(fs.readFileSync(filename, 'utf8'), {
   fileName: filename, compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, esModuleInterop: true },
 }).outputText, filename);
@@ -18,6 +13,7 @@ Module._resolveFilename = function(request, parent, ...args) {
   return resolve.call(this, request.startsWith('@/') ? path.resolve(__dirname, '..', request.slice(2)) : request, parent, ...args);
 };
 
+const { runWithStudioData } = require('../lib/requestDb.ts');
 const { seedProfile, seedProjects } = require('../lib/seed.ts');
 const { tailorRules, buildResumeText, trimSummary, extractKeywords, skillSupported } = require('../lib/tailor.ts');
 const { buildPdfBuffer, buildDocxBuffer } = require('../lib/resumeFiles.ts');

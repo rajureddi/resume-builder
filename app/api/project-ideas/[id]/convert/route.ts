@@ -1,3 +1,4 @@
+import { withStudioData } from "@/lib/requestDb";
 import { NextRequest, NextResponse } from "next/server";
 import { convertProjectIdea } from "@/lib/db";
 
@@ -5,7 +6,7 @@ import { convertProjectIdea } from "@/lib/db";
 // with the idea's title / description / keywords (as tags) / domain, and
 // the idea is removed. From this moment the project is a normal library
 // project — eligible for JD ranking, resumes and ATS evidence.
-export async function POST(
+async function handlePOST(
   _req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
@@ -19,3 +20,5 @@ export async function POST(
   }
   return NextResponse.json({ ok: true, project });
 }
+
+export const POST = withStudioData(handlePOST);

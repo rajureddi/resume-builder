@@ -1,7 +1,8 @@
+import { withStudioData } from "@/lib/requestDb";
 import { NextRequest, NextResponse } from "next/server";
 import { deleteProjectIdea } from "@/lib/db";
 
-export async function DELETE(
+async function handleDELETE(
   _req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
@@ -15,3 +16,5 @@ export async function DELETE(
   }
   return NextResponse.json({ ok: true });
 }
+
+export const DELETE = withStudioData(handleDELETE);

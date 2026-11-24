@@ -1,6 +1,9 @@
+import { withStudioData } from "@/lib/requestDb";
 import { NextResponse } from "next/server";
 import { listApplications } from "@/lib/db";
 
-export async function GET() {
+async function handleGET() {
   return NextResponse.json({ ok: true, applications: await listApplications() });
 }
+
+export const GET = withStudioData(handleGET);

@@ -1,8 +1,9 @@
+import { withStudioData } from "@/lib/requestDb";
 import { NextRequest, NextResponse } from "next/server";
 import { saveProfile } from "@/lib/db";
 import type { Profile } from "@/lib/types";
 
-export async function PUT(req: NextRequest) {
+async function handlePUT(req: NextRequest) {
   const body = (await req.json().catch(() => null)) as Profile | null;
   if (!body || !body.name || !body.email) {
     return NextResponse.json(
@@ -13,3 +14,5 @@ export async function PUT(req: NextRequest) {
   const saved = await saveProfile(body);
   return NextResponse.json({ ok: true, profile: saved });
 }
+
+export const PUT = withStudioData(handlePUT);

@@ -1,3 +1,4 @@
+import { withStudioData } from "@/lib/requestDb";
 import { NextRequest, NextResponse } from "next/server";
 import {
   createApplication,
@@ -17,7 +18,7 @@ export const maxDuration = 60;
 // (an application that opens in the paper view with working Print/PDF).
 // Returns the fix report: before → after, per-fix points summing to the
 // delta, remaining true gaps with their points, and the new resume id.
-export async function POST(req: NextRequest) {
+async function handlePOST(req: NextRequest) {
   const body = (await req.json().catch(() => ({}))) as {
     checkId?: string;
     applicationId?: string;
@@ -26,6 +27,7 @@ export async function POST(req: NextRequest) {
     sourceType?: string;
     resumeName?: string;
     additionalSkills?: string[];
+    llmSettings?: unknown;
   };
 
   let resumeText = body.resumeText ?? "";
@@ -78,6 +80,7 @@ export async function POST(req: NextRequest) {
     profile,
     projects,
     additionalSkills: body.additionalSkills,
+    llmSettings: body.llmSettings,
   });
 
   if (!applicationPayload || !afterResult) {
@@ -123,3 +126,5 @@ export async function POST(req: NextRequest) {
     check,
   });
 }
+
+export const POST = withStudioData(handlePOST);

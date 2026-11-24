@@ -1,13 +1,10 @@
-const test = require('node:test');
+const nodeTest = require('node:test');
+const test = (name, callback) => nodeTest(name, () => runWithStudioData(undefined, callback));
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const os = require('node:os');
 const path = require('node:path');
 const Module = require('node:module');
 const ts = require('typescript');
-process.env.DATA_FILE = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'project-experience-test-')), 'db.json');
-delete process.env.DATABASE_URL;
-delete process.env.GROQ_API_KEY;
 require.extensions['.ts'] = (module, filename) => module._compile(ts.transpileModule(fs.readFileSync(filename, 'utf8'), { fileName: filename, compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, esModuleInterop: true } }).outputText, filename);
 const resolve = Module._resolveFilename;
 Module._resolveFilename = function(request, parent, ...args) { return resolve.call(this, request.startsWith('@/') ? path.resolve(__dirname, '..', request.slice(2)) : request, parent, ...args); };
@@ -15,6 +12,7 @@ Module._resolveFilename = function(request, parent, ...args) { return resolve.ca
 const { PROJECT_TEMPLATES, draftFromTemplate } = require('../lib/projectTemplates.ts');
 const { parseProjectBlocks, canonicalProject, projectForVariant, roleProjectBullets, projectRewriteBullets, validRewrittenBullets } = require('../lib/projectContent.ts');
 const { buildSkillSuggestions } = require('../lib/buildSkills.ts');
+const { createStudioData, getStudioData, runWithStudioData } = require('../lib/requestDb.ts');
 const { seedProfile, seedProjects } = require('../lib/seed.ts');
 const { tailorRules } = require('../lib/tailor.ts');
 const { validExperience } = require('../lib/profileValidation.ts');
@@ -173,7 +171,8 @@ test('project template versions survive saving to the project library', async ()
 
 test('generation respects selected skills, project versions and experience while rejecting unavailable versions', async () => {
   const route = require('../app/api/tailor-resume/route.ts');
-  const project = (await db.listProjects()).find(project => project.templateId === 'fullstack-tracker');
+  await db.saveExperience([exp]);
+  const project = await db.createProject(draftFromTemplate(PROJECT_TEMPLATES.find(project => project.id === 'fullstack-tracker')));
   const body = { company: 'Example', role: 'Flutter Developer', jdText: 'Build Flutter applications with Dart and Supabase storage.', selectedProjectIds: [project.id], projectVariants: { [project.id]: 'flutter' }, selectedSkills: ['Flutter', 'Dart'], selectedExperienceIds: [exp.id] };
   const response = await route.POST(request('/api/tailor-resume', body, 'POST'));
   assert.equal(response.status, 200);
@@ -182,4 +181,38 @@ test('generation respects selected skills, project versions and experience while
   assert.equal(app.projects[0].variantId, 'flutter');
   assert.equal(app.experience[0].id, exp.id);
   assert.equal((await route.POST(request('/api/tailor-resume', { ...body, projectVariants: { [project.id]: 'missing' } }, 'POST'))).status, 400);
+});
+
+test('concurrent browser snapshots keep profiles and deleted project lists isolated', async () => {
+  const left = createStudioData();
+  const right = createStudioData();
+  left.profile.name = 'Left Browser';
+  left.projects = [];
+  right.profile.name = 'Right Browser';
+  const results = await Promise.all([left, right].map(snapshot => runWithStudioData(snapshot, async () => {
+    await new Promise(resolve => setTimeout(resolve, 5));
+    const profile = await db.getProfile();
+    const updated = { ...profile, summary: `${profile.name} request summary` };
+    await db.saveProfile(updated);
+    return { name: (await db.getProfile()).name, summary: (await db.getProfile()).summary, projects: (await db.listProjects()).length };
+  })));
+  assert.deepEqual(results[0], { name: 'Left Browser', summary: 'Left Browser request summary', projects: 0 });
+  assert.deepEqual(results[1], { name: 'Right Browser', summary: 'Right Browser request summary', projects: seedProjects.length });
+  assert.equal(left.profile.summary, seedProfile.summary);
+  assert.equal(right.profile.summary, seedProfile.summary);
+  assert.equal((await db.getProfile()).name, seedProfile.name);
+});
+
+test('server mutation returns a result without saving it in another request context', async () => {
+  const route = require('../app/api/projects/route.ts');
+  const studioData = createStudioData();
+  studioData.projects = [];
+  const draft = draftFromTemplate(PROJECT_TEMPLATES.find(project => project.id === 'fullstack-tracker'));
+  const response = await route.POST(request('/api/projects', { ...draft, studioData }, 'POST'));
+  assert.equal(response.status, 200);
+  const created = (await response.json()).project;
+  assert.ok(created.id);
+  assert.deepEqual(studioData.projects, []);
+  assert.equal(getStudioData().projects.some(project => project.id === created.id), false);
+  assert.equal(await runWithStudioData(undefined, async () => (await db.listProjects()).some(project => project.id === created.id)), false);
 });

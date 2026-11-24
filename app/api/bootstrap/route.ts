@@ -1,8 +1,9 @@
+import { withStudioData } from "@/lib/requestDb";
 import { NextResponse } from "next/server";
 import { getProfile, listApplications, listAtsChecks, listProjectIdeas, listProjects } from "@/lib/db";
 import { getPublicSettings } from "@/lib/llm";
 
-export async function GET() {
+async function handleGET() {
   const [profile, projects, applications, atsChecks, projectIdeas, llm] =
     await Promise.all([
       getProfile(),
@@ -25,3 +26,5 @@ export async function GET() {
     },
   });
 }
+
+export const GET = withStudioData(handleGET);

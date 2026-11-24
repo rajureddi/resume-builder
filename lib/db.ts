@@ -1,192 +1,19 @@
-import { neon } from "@neondatabase/serverless";
-import { promises as fs } from "fs";
-import path from "path";
-import { seedProfile, seedProjects } from "./seed";
-import type {
-  Application,
-  AtsCheck,
-  Profile,
-  Project,
-  ProjectIdea,
-  ExperienceItem,
-  SkillGroup,
-} from "./types";
+import { getStudioData, type StudioData } from "./requestDb";
+import { seedProfile } from "./seed";
+import type { Application, AtsCheck, Profile, Project, ProjectIdea, ExperienceItem, SkillGroup } from "./types";
 
-export interface RawLlmSettings {
-  provider: string;
-  baseUrl: string;
-  model: string;
-  apiKey: string;
-}
-
-interface DbShape {
-  profile: Profile | null;
-  projects: Project[];
-  projectIdeas: ProjectIdea[];
-  applications: Application[];
-  atsChecks: AtsCheck[];
-  llmSettings: RawLlmSettings | null;
-}
-
-const usePg = !!process.env.DATABASE_URL;
-let loggedMode = false;
-
-export function canPersistLlmSettings(): boolean {
-  return usePg || !process.env.VERCEL;
-}
-
-function logMode() {
-  if (loggedMode) return;
-  loggedMode = true;
-  if (usePg) {
-    console.log("[db] Using Postgres (DATABASE_URL set)");
-  } else {
-    console.log(
-      "[db] DATABASE_URL not set — using JSON file store (DEMO MODE: data may not persist on Vercel serverless). Set DATABASE_URL (Neon) for real persistence."
-    );
-  }
-}
-
+// This compatibility API operates only on the current request's browser
+// snapshot. The browser persists returned changes; the server never stores data.
 export function uid(prefix = "id"): string {
-  return `${prefix}_${Date.now().toString(36)}_${Math.random()
-    .toString(36)
-    .slice(2, 8)}`;
+  return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
-function seedShape(): DbShape {
-  return {
-    profile: structuredClone(seedProfile),
-    projects: structuredClone(seedProjects),
-    projectIdeas: [],
-    applications: [],
-    atsChecks: [],
-    llmSettings: null,
-  };
+async function load(): Promise<StudioData> {
+  return getStudioData();
 }
 
-/* ───────────────────────── JSON file backend ───────────────────────── */
-
-function dataFilePath(): string {
-  if (process.env.DATA_FILE) return path.resolve(process.env.DATA_FILE);
-  if (process.env.VERCEL) return "/tmp/resume-builder-db.json";
-  return path.join(process.cwd(), "data", "db.json");
-}
-
-let fileQueue: Promise<unknown> = Promise.resolve();
-function withFileLock<T>(fn: () => Promise<T>): Promise<T> {
-  const run = fileQueue.then(fn, fn);
-  fileQueue = run.catch(() => undefined);
-  return run;
-}
-
-async function loadFromFile(): Promise<DbShape> {
-  const file = dataFilePath();
-  try {
-    const raw = await fs.readFile(file, "utf8");
-    const parsed = JSON.parse(raw) as DbShape;
-    if (!parsed.profile) parsed.profile = structuredClone(seedProfile);
-    if (!Array.isArray(parsed.projects) || parsed.projects.length === 0)
-      parsed.projects = structuredClone(seedProjects);
-    if (!Array.isArray(parsed.applications)) parsed.applications = [];
-    if (!Array.isArray(parsed.atsChecks)) parsed.atsChecks = [];
-    if (!Array.isArray(parsed.projectIdeas)) parsed.projectIdeas = [];
-    return parsed;
-  } catch {
-    const shape = seedShape();
-    await saveToFile(shape);
-    return shape;
-  }
-}
-
-async function saveToFile(shape: DbShape): Promise<void> {
-  const file = dataFilePath();
-  await fs.mkdir(path.dirname(file), { recursive: true });
-  await fs.writeFile(file, JSON.stringify(shape, null, 2), "utf8");
-}
-
-/* ───────────────────────── Postgres backend ────────────────────────── */
-
-function sqlClient() {
-  return neon(process.env.DATABASE_URL as string);
-}
-
-let pgReady: Promise<void> | null = null;
-function ensurePgTable(): Promise<void> {
-  if (!pgReady) {
-    const sql = sqlClient();
-    pgReady = (async () => {
-      await sql`CREATE TABLE IF NOT EXISTS rb_store (
-        key TEXT PRIMARY KEY,
-        value JSONB NOT NULL
-      )`;
-    })();
-  }
-  return pgReady;
-}
-
-async function loadFromPg(): Promise<DbShape> {
-  await ensurePgTable();
-  const sql = sqlClient();
-  const rows = (await sql`SELECT key, value FROM rb_store`) as {
-    key: string;
-    value: unknown;
-  }[];
-  const map = new Map(rows.map((r) => [r.key, r.value]));
-  if (rows.length === 0) {
-    const shape = seedShape();
-    await saveToPg(shape);
-    return shape;
-  }
-  return {
-    profile: (map.get("profile") as Profile) ?? structuredClone(seedProfile),
-    projects:
-      (map.get("projects") as Project[]) ?? structuredClone(seedProjects),
-    projectIdeas: (map.get("projectIdeas") as ProjectIdea[]) ?? [],
-    applications: (map.get("applications") as Application[]) ?? [],
-    atsChecks: (map.get("atsChecks") as AtsCheck[]) ?? [],
-    llmSettings: (map.get("llmSettings") as RawLlmSettings) ?? null,
-  };
-}
-
-async function saveToPg(shape: DbShape): Promise<void> {
-  await ensurePgTable();
-  const sql = sqlClient();
-  const entries: [string, unknown][] = [
-    ["profile", shape.profile],
-    ["projects", shape.projects],
-    ["projectIdeas", shape.projectIdeas],
-    ["applications", shape.applications],
-    ["atsChecks", shape.atsChecks],
-    ["llmSettings", shape.llmSettings],
-  ];
-  for (const [key, value] of entries) {
-    await sql`INSERT INTO rb_store (key, value) VALUES (${key}, ${JSON.stringify(
-      value
-    )}::jsonb)
-      ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`;
-  }
-}
-
-/* ───────────────────────── Unified store ───────────────────────────── */
-
-async function load(): Promise<DbShape> {
-  logMode();
-  return usePg ? loadFromPg() : withFileLock(loadFromFile);
-}
-
-async function update<T>(fn: (shape: DbShape) => T): Promise<T> {
-  if (usePg) {
-    const shape = await loadFromPg();
-    const out = fn(shape);
-    await saveToPg(shape);
-    return out;
-  }
-  return withFileLock(async () => {
-    const shape = await loadFromFile();
-    const out = fn(shape);
-    await saveToFile(shape);
-    return out;
-  });
+async function update<T>(fn: (shape: StudioData) => T): Promise<T> {
+  return fn(getStudioData());
 }
 
 /* ───────────────────────── Public API ──────────────────────────────── */
@@ -412,19 +239,5 @@ export async function deleteAtsCheck(id: string): Promise<boolean> {
     const before = s.atsChecks.length;
     s.atsChecks = s.atsChecks.filter((x) => x.id !== id);
     return s.atsChecks.length !== before;
-  });
-}
-
-export async function getRawLlmSettings(): Promise<RawLlmSettings | null> {
-  const s = await load();
-  return s.llmSettings;
-}
-
-export async function saveRawLlmSettings(
-  settings: RawLlmSettings
-): Promise<RawLlmSettings> {
-  return update((s) => {
-    s.llmSettings = settings;
-    return settings;
   });
 }
