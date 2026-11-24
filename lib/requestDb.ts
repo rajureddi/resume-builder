@@ -66,7 +66,20 @@ export function withStudioData<Args extends unknown[]>(handler: (...args: Args) 
     }
     if (hasSnapshot && request) {
       const { studioData: _snapshot, ...payload } = body;
-      args[0] = new NextRequest(request, { body: JSON.stringify(payload) }) as Args[0];
+      const headers = new Headers(request.headers);
+      headers.delete("content-length");
+      try {
+        args[0] = new NextRequest(request.url, {
+          method: request.method,
+          headers,
+          body: JSON.stringify(payload),
+          signal: request.signal,
+        }) as Args[0];
+      } catch {
+        args[0] = Object.assign(request, {
+          json: async () => payload,
+        }) as Args[0];
+      }
     }
     return requestStore.run(data, () => handler(...args));
   };
